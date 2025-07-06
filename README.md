@@ -17,6 +17,7 @@ scipy
 numba
 matplotlib
 tqdm
+emd-signal
 ```
 
 ## Usage
