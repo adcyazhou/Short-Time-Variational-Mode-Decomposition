@@ -1,6 +1,6 @@
 # Short-time Variational Mode Decomposition (STVMD)
 
-Python implementation of Short-time Variational Mode Decomposition (STVMD) algorithm, as described in our paper "[Short-time Variational Mode Decomposition](https://arxiv.org/abs/2501.09174)".
+Python implementation of Short-time Variational Mode Decomposition (STVMD) algorithm, as described in our paper "[Short-time Variational Mode Decomposition](https://doi.org/10.1016/j.sigpro.2025.110203)".
 
 ## Overview
 
@@ -58,11 +58,20 @@ See `paste.txt` for complete implementation and examples.
 If you use this code in your research, please cite:
 
 ```
-@article{jia2024shorttime,
-  title={Short-time Variational Mode Decomposition},
-  author={Jia, Hao and Cao, Pengfei and Liang, Tong and others},
-  journal={arXiv preprint arXiv:2501.09174},
-  year={2024}
+@article{jia_short-time_2025,
+	title = {Short-time variational mode decomposition},
+	copyright = {https://www.elsevier.com/tdm/userlicense/1.0/},
+	issn = {0165-1684},
+	url = {https://linkinghub.elsevier.com/retrieve/pii/S0165168425003172},
+	doi = {10.1016/j.sigpro.2025.110203},
+	language = {en},
+	urldate = {2025-07-24},
+	journal = {Signal Processing},
+	author = {Jia, Hao and Cao, Pengfei and Liang, Tong and Caiafa, Cesar F. and Sun, Zhe and Kushihashi, Yasuhiro and Grau, Antoni and Bolea, Yolanda and Duan, Feng and Solé-Casals, Jordi},
+	month = jul,
+	year = {2025},
+	note = {Publisher: Elsevier BV},
+	pages = {110203},
 }
 ```
 
