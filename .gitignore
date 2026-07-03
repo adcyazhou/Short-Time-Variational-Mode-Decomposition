@@ -32,3 +32,8 @@ Thumbs.db
 
 # Local isolated development worktrees
 .worktrees/
+
+# Codex brainstorming and generated STVMD output
+.superpowers/
+tmp/
+output/stvmd_blast/
