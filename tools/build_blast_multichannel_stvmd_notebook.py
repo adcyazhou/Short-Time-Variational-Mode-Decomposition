@@ -313,6 +313,72 @@ def run_dynamic_stvmd_batched(
 '''.strip()
 
 
+DIAGNOSTICS = r'''
+def power_to_db(power, floor_db=-100.0):
+    power = np.asarray(power, dtype=float)
+    peak = float(np.max(power))
+    if not np.isfinite(peak) or peak <= 0:
+        return np.full_like(power, floor_db)
+    db = 10.0 * np.log10(
+        np.maximum(power / peak, 10 ** (floor_db / 10))
+    )
+    return np.maximum(db, floor_db)
+
+
+def _energy_band(freq_hz, power, low=0.05, high=0.95):
+    power = np.maximum(np.asarray(power, dtype=float), 0.0)
+    total = float(np.sum(power))
+    if total <= np.finfo(float).eps:
+        return np.array([0.0, 0.0])
+    cumulative = np.cumsum(power) / total
+    return np.array(
+        [
+            np.interp(low, cumulative, freq_hz),
+            np.interp(high, cumulative, freq_hz),
+        ]
+    )
+
+
+def summarize_stvmd_result(x, fs, raw_result):
+    modes = raw_result["modes"]
+    reconstruction = np.sum(modes, axis=0)
+    denominator = np.linalg.norm(x, axis=1)
+    nrmse = np.divide(
+        np.linalg.norm(x - reconstruction, axis=1),
+        denominator,
+        out=np.zeros_like(denominator),
+        where=denominator > np.finfo(float).eps,
+    )
+    mode_energy = np.sum(modes ** 2, axis=2)
+    channel_energy = np.sum(mode_energy, axis=0, keepdims=True)
+    energy_fraction = np.divide(
+        mode_energy,
+        channel_energy,
+        out=np.zeros_like(mode_energy),
+        where=channel_energy > np.finfo(float).eps,
+    )
+    freq_hz = scipy.fft.rfftfreq(modes.shape[-1], d=1.0 / fs)
+    bands = np.zeros((modes.shape[0], 2), dtype=float)
+    mode_power = np.zeros((modes.shape[0], freq_hz.size), dtype=float)
+    for mode in range(modes.shape[0]):
+        spectra = scipy.fft.rfft(modes[mode], axis=1, workers=-1)
+        mode_power[mode] = np.sum(np.abs(spectra) ** 2, axis=0)
+        bands[mode] = _energy_band(freq_hz, mode_power[mode])
+    result = dict(raw_result)
+    result.update(
+        {
+            "reconstruction": reconstruction,
+            "nrmse": nrmse,
+            "energy_fraction": energy_fraction,
+            "frequency_hz": freq_hz,
+            "mode_power": mode_power,
+            "frequency_bands_hz": bands,
+        }
+    )
+    return result
+'''.strip()
+
+
 def build():
     cells = [
         md(
@@ -325,6 +391,7 @@ def build():
         core(LOADER),
         md("## 3. 动态多通道 STVMD"),
         core(STVMD),
+        core(DIAGNOSTICS),
         md("## 4. Tran 方向"),
         md("## 5. Vert 方向"),
         md("## 6. Long 方向"),

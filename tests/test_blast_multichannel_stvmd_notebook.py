@@ -134,3 +134,29 @@ def test_single_batch_and_split_batches_agree():
         split["center_freq_hz"], whole["center_freq_hz"], atol=2e-3
     )
     np.testing.assert_allclose(split["modes"], whole["modes"], atol=2e-3)
+
+
+def test_summarize_result_reports_reconstruction_and_bands():
+    ns = notebook_namespace()
+    x = synthetic_multichannel(n=128)
+    raw = ns["run_dynamic_stvmd_batched"](
+        x, fs=128, K=3, alpha=50.0, window_length=32,
+        tau=1e-5, tol=1e-6, max_iters=80, batch_windows=19,
+    )
+    summary = ns["summarize_stvmd_result"](x, 128, raw)
+    assert summary["reconstruction"].shape == x.shape
+    assert summary["nrmse"].shape == (3,)
+    assert summary["energy_fraction"].shape == (3, 3)
+    assert summary["frequency_bands_hz"].shape == (3, 2)
+    assert np.all(
+        summary["frequency_bands_hz"][:, 0]
+        <= summary["frequency_bands_hz"][:, 1]
+    )
+
+
+def test_power_to_db_has_zero_db_maximum():
+    ns = notebook_namespace()
+    power = np.array([[1.0, 10.0], [100.0, 0.0]])
+    db = ns["power_to_db"](power)
+    assert np.max(db) == pytest.approx(0.0)
+    assert np.isfinite(db).all()
