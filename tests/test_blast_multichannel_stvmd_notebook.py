@@ -2,6 +2,7 @@ from pathlib import Path
 
 import nbformat
 import numpy as np
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,3 +73,64 @@ def test_prepare_direction_inputs_truncates_to_common_length(tmp_path):
     assert signals["Tran"].shape == (3, 4)
     np.testing.assert_array_equal(signals["Tran"][:, 0], [0, 0, 0])
     assert time_s[0] == -0.5
+
+
+def synthetic_multichannel(fs=128, n=256):
+    t = np.arange(n) / fs
+    base_1 = np.sin(2 * np.pi * 20 * t)
+    base_2 = 0.6 * np.sin(2 * np.pi * 28 * t)
+    return np.vstack(
+        [
+            base_1 + base_2,
+            0.7 * base_1 + 1.1 * base_2,
+            1.2 * base_1 + 0.5 * base_2,
+        ]
+    )
+
+
+def test_validate_config_rejects_non_repository_window():
+    ns = notebook_namespace()
+    with pytest.raises(ValueError, match="WINDOW_LENGTH"):
+        ns["validate_config"](3, 50.0, 512, 16, 50)
+
+
+def test_batched_dynamic_stvmd_returns_finite_aligned_results():
+    ns = notebook_namespace()
+    x = synthetic_multichannel(n=128)
+    result = ns["run_dynamic_stvmd_batched"](
+        x,
+        fs=128,
+        K=3,
+        alpha=50.0,
+        window_length=32,
+        tau=1e-5,
+        tol=1e-6,
+        max_iters=80,
+        batch_windows=17,
+    )
+    assert result["modes"].shape == (3, 3, 128)
+    assert result["center_freq_hz"].shape == (3, 128)
+    assert result["mean_tf_power"].shape == (17, 128)
+    assert np.isfinite(result["modes"]).all()
+    assert np.isfinite(result["center_freq_hz"]).all()
+    np.testing.assert_allclose(result["center_freq_hz"][0], 0.0)
+
+
+def test_single_batch_and_split_batches_agree():
+    ns = notebook_namespace()
+    x = synthetic_multichannel(n=96)
+    kwargs = dict(
+        fs=128,
+        K=3,
+        alpha=50.0,
+        window_length=32,
+        tau=1e-5,
+        tol=1e-7,
+        max_iters=100,
+    )
+    whole = ns["run_dynamic_stvmd_batched"](x, batch_windows=96, **kwargs)
+    split = ns["run_dynamic_stvmd_batched"](x, batch_windows=13, **kwargs)
+    np.testing.assert_allclose(
+        split["center_freq_hz"], whole["center_freq_hz"], atol=2e-3
+    )
+    np.testing.assert_allclose(split["modes"], whole["modes"], atol=2e-3)
