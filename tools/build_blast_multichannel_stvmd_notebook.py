@@ -750,6 +750,8 @@ def build():
             '    print("SAVE_OUTPUTS=False：未写出结果文件。")'
         ),
     ]
+    for index, cell in enumerate(cells):
+        cell["id"] = f"stvmd-{index:02d}"
     notebook = new_notebook(
         cells=cells,
         metadata={
