@@ -379,6 +379,209 @@ def summarize_stvmd_result(x, fs, raw_result):
 '''.strip()
 
 
+PLOTTING = r'''
+DISTANCE_LABELS = ("5 m", "10 m", "15 m")
+MODE_COLORS = ("#64748b", "#0072B2", "#D55E00", "#009E73", "#CC79A7")
+
+
+def _frequency_extent(time_s, fs, frequency_bins):
+    return [time_s[0], time_s[-1], 0.0, fs / 2.0]
+
+
+def _limit_frequency_axis(axis, plot_max_hz, fs):
+    axis.set_ylim(0.0, min(float(plot_max_hz), fs / 2.0))
+    axis.set_ylabel("Frequency (Hz)")
+
+
+def plot_input_and_tf(direction, x, time_s, fs, result, plot_max_hz):
+    fig, axes = plt.subplots(
+        1, 2, figsize=(12, 4.2), constrained_layout=True
+    )
+    for channel, label in enumerate(DISTANCE_LABELS):
+        axes[0].plot(time_s, x[channel], lw=0.8, label=label)
+    axes[0].axvline(0, color="black", ls="--", lw=0.8)
+    axes[0].set(
+        xlabel="Time (s)",
+        ylabel="Velocity (mm/s)",
+        title=f"{direction}: input velocity",
+    )
+    axes[0].legend(frameon=False)
+    image = axes[1].imshow(
+        power_to_db(result["mean_tf_power"]),
+        origin="lower",
+        aspect="auto",
+        extent=_frequency_extent(
+            time_s, fs, result["mean_tf_power"].shape[0]
+        ),
+        cmap="viridis",
+        vmin=-80,
+        vmax=0,
+    )
+    _limit_frequency_axis(axes[1], plot_max_hz, fs)
+    axes[1].set(xlabel="Time (s)", title="Mean multichannel TF power")
+    fig.colorbar(image, ax=axes[1], label="Relative power (dB)")
+    return fig
+
+
+def plot_modes(direction, time_s, result):
+    modes = result["modes"]
+    mode_n, channel_n, _ = modes.shape
+    fig, axes = plt.subplots(
+        mode_n,
+        channel_n,
+        figsize=(12, max(4.0, 2.1 * mode_n)),
+        sharex=True,
+        squeeze=False,
+        constrained_layout=True,
+    )
+    for mode in range(mode_n):
+        row_name = "Residual" if mode == 0 else f"Mode {mode}"
+        for channel in range(channel_n):
+            axis = axes[mode, channel]
+            axis.plot(
+                time_s,
+                modes[mode, channel],
+                color=MODE_COLORS[mode],
+                lw=0.7,
+            )
+            axis.axvline(0, color="black", ls="--", lw=0.6)
+            if mode == 0:
+                axis.set_title(DISTANCE_LABELS[channel])
+            if channel == 0:
+                axis.set_ylabel(f"{row_name}\nVelocity (mm/s)")
+            if mode == mode_n - 1:
+                axis.set_xlabel("Time (s)")
+    fig.suptitle(f"{direction}: dynamic STVMD modes")
+    return fig
+
+
+def plot_if_and_reconstruction(
+    direction, x, time_s, result, plot_max_hz
+):
+    mode_n, channel_n, _ = result["modes"].shape
+    fig = plt.figure(figsize=(12, 9), constrained_layout=True)
+    grid = fig.add_gridspec(3, 3, height_ratios=(1.0, 1.3, 0.8))
+    axis_if = fig.add_subplot(grid[0, :])
+    for mode in range(1, mode_n):
+        axis_if.plot(
+            time_s,
+            result["center_freq_hz"][mode],
+            color=MODE_COLORS[mode],
+            lw=1.1,
+            label=f"Mode {mode}",
+        )
+    axis_if.axvline(0, color="black", ls="--", lw=0.7)
+    axis_if.set(
+        xlabel="Time (s)",
+        ylabel="Frequency (Hz)",
+        title=f"{direction}: instantaneous center frequencies",
+        ylim=(0.0, plot_max_hz),
+    )
+    axis_if.legend(frameon=False, ncol=max(1, mode_n - 1))
+
+    for channel in range(channel_n):
+        axis = fig.add_subplot(grid[1, channel])
+        axis.plot(
+            time_s, x[channel], color="#64748b", lw=0.8, label="Input"
+        )
+        axis.plot(
+            time_s,
+            result["reconstruction"][channel],
+            color="#D55E00",
+            lw=0.7,
+            alpha=0.85,
+            label="Reconstruction",
+        )
+        axis.axvline(0, color="black", ls="--", lw=0.6)
+        axis.set(
+            xlabel="Time (s)",
+            ylabel="Velocity (mm/s)",
+            title=(
+                f"{DISTANCE_LABELS[channel]}  "
+                f"NRMSE={result['nrmse'][channel]:.3g}"
+            ),
+        )
+        if channel == 0:
+            axis.legend(frameon=False)
+
+    axis_energy = fig.add_subplot(grid[2, :])
+    energy_image = axis_energy.imshow(
+        result["energy_fraction"],
+        aspect="auto",
+        cmap="magma",
+        vmin=0.0,
+        vmax=max(1e-12, float(result["energy_fraction"].max())),
+    )
+    axis_energy.set(
+        xlabel="Channel", ylabel="Component", title="Mode energy fraction"
+    )
+    axis_energy.set_xticks(range(channel_n), DISTANCE_LABELS[:channel_n])
+    axis_energy.set_yticks(
+        range(mode_n),
+        ["Residual"] + [f"Mode {mode}" for mode in range(1, mode_n)],
+    )
+    fig.colorbar(energy_image, ax=axis_energy, label="Fraction")
+    return fig
+
+
+def plot_spectrum_if_mapping(
+    direction, x, time_s, fs, result, plot_max_hz
+):
+    freq_hz = scipy.fft.rfftfreq(x.shape[1], d=1.0 / fs)
+    spectra = scipy.fft.rfft(x, axis=1, workers=-1)
+    combined_amplitude = np.sqrt(np.mean(np.abs(spectra) ** 2, axis=0))
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(12, 5.2),
+        gridspec_kw={"width_ratios": (1.0, 3.2)},
+        sharey=True,
+        constrained_layout=True,
+    )
+    axes[0].plot(combined_amplitude, freq_hz, color="#475569", lw=0.8)
+    axes[0].set(
+        xlabel="Combined amplitude",
+        ylabel="Frequency (Hz)",
+        title="Fourier spectrum",
+    )
+    tf_image = axes[1].imshow(
+        power_to_db(result["mean_tf_power"]),
+        origin="lower",
+        aspect="auto",
+        extent=_frequency_extent(
+            time_s, fs, result["mean_tf_power"].shape[0]
+        ),
+        cmap="viridis",
+        vmin=-80,
+        vmax=0,
+    )
+    for mode in range(1, result["modes"].shape[0]):
+        color = MODE_COLORS[mode]
+        band_low, band_high = result["frequency_bands_hz"][mode]
+        axes[1].plot(
+            time_s,
+            result["center_freq_hz"][mode],
+            color=color,
+            lw=1.2,
+            label=(
+                f"Mode {mode}: {band_low:.1f}-{band_high:.1f} Hz"
+            ),
+        )
+        for boundary in (band_low, band_high):
+            axes[0].axhline(boundary, color=color, ls="--", lw=0.8)
+            axes[1].axhline(boundary, color=color, ls="--", lw=0.8)
+    axes[1].axvline(0, color="white", ls=":", lw=0.8)
+    axes[1].set(
+        xlabel="Time (s)", title=f"{direction}: TF spectrum and IF tracks"
+    )
+    axes[1].legend(frameon=True, fontsize=8, loc="upper right")
+    _limit_frequency_axis(axes[0], plot_max_hz, fs)
+    _limit_frequency_axis(axes[1], plot_max_hz, fs)
+    fig.colorbar(tf_image, ax=axes[1], label="Relative power (dB)")
+    return fig
+'''.strip()
+
+
 def build():
     cells = [
         md(
@@ -392,6 +595,7 @@ def build():
         md("## 3. 动态多通道 STVMD"),
         core(STVMD),
         core(DIAGNOSTICS),
+        core(PLOTTING),
         md("## 4. Tran 方向"),
         md("## 5. Vert 方向"),
         md("## 6. Long 方向"),

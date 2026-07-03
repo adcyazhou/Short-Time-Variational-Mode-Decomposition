@@ -3,6 +3,10 @@ from pathlib import Path
 import nbformat
 import numpy as np
 import pytest
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -160,3 +164,33 @@ def test_power_to_db_has_zero_db_maximum():
     db = ns["power_to_db"](power)
     assert np.max(db) == pytest.approx(0.0)
     assert np.isfinite(db).all()
+
+
+def diagnostic_fixture(ns):
+    x = synthetic_multichannel(n=128)
+    raw = ns["run_dynamic_stvmd_batched"](
+        x, fs=128, K=3, alpha=50.0, window_length=32,
+        tau=1e-5, tol=1e-6, max_iters=80, batch_windows=19,
+    )
+    return x, ns["summarize_stvmd_result"](x, 128, raw)
+
+
+def test_plot_functions_return_expected_axes():
+    ns = notebook_namespace()
+    x, result = diagnostic_fixture(ns)
+    time_s = np.arange(x.shape[1]) / 128 - 0.5
+    fig1 = ns["plot_input_and_tf"]("Tran", x, time_s, 128, result, 64)
+    fig2 = ns["plot_modes"]("Tran", time_s, result)
+    fig3 = ns["plot_if_and_reconstruction"](
+        "Tran", x, time_s, result, 64
+    )
+    fig4 = ns["plot_spectrum_if_mapping"](
+        "Tran", x, time_s, 128, result, 64
+    )
+    assert len(fig1.axes) >= 2
+    assert len(fig2.axes) == 9
+    assert len(fig3.axes) >= 3
+    assert len(fig4.axes) >= 2
+    for figure in (fig1, fig2, fig3, fig4):
+        figure.canvas.draw()
+        plt.close(figure)
