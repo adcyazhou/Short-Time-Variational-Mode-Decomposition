@@ -1,4 +1,7 @@
 from pathlib import Path
+import os
+import subprocess
+import sys
 
 import nbformat
 import numpy as np
@@ -194,3 +197,56 @@ def test_plot_functions_return_expected_axes():
     for figure in (fig1, fig2, fig3, fig4):
         figure.canvas.draw()
         plt.close(figure)
+
+
+def test_save_outputs_write_four_pngs_and_combined_npz(tmp_path):
+    ns = notebook_namespace()
+    x, result = diagnostic_fixture(ns)
+    time_s = np.arange(x.shape[1]) / 128 - 0.5
+    figures = {
+        "input_tf": ns["plot_input_and_tf"](
+            "Tran", x, time_s, 128, result, 64
+        ),
+        "modes": ns["plot_modes"]("Tran", time_s, result),
+        "if_reconstruction": ns["plot_if_and_reconstruction"](
+            "Tran", x, time_s, result, 64
+        ),
+        "spectrum_if_mapping": ns["plot_spectrum_if_mapping"](
+            "Tran", x, time_s, 128, result, 64
+        ),
+    }
+    ns["save_direction_figures"](tmp_path, "Tran", figures)
+    ns["save_all_results"](
+        tmp_path,
+        {"Tran": result},
+        {"K": 3, "ALPHA": 50.0, "WINDOW_LENGTH": 32},
+    )
+    assert (tmp_path / "stvmd_results.npz").is_file()
+    assert len(list(tmp_path.glob("tran_*.png"))) == 4
+    for figure in figures.values():
+        plt.close(figure)
+
+
+def test_notebook_executes_in_quick_test_mode():
+    script = (
+        "import os, nbformat;"
+        "from nbclient import NotebookClient;"
+        "os.environ['STVMD_QUICK_TEST']='1';"
+        f"p=r'{NOTEBOOK}';"
+        "nb=nbformat.read(p,as_version=4);"
+        f"NotebookClient(nb,timeout=300,kernel_name='python3',"
+        f"resources={{'metadata':{{'path':r'{ROOT}'}}}}).execute();"
+        "print('NOTEBOOK_SMOKE_OK')"
+    )
+    env = os.environ.copy()
+    env["MPLBACKEND"] = "Agg"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=360,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "NOTEBOOK_SMOKE_OK" in completed.stdout

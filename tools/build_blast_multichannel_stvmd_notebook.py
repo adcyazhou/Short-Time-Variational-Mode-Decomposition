@@ -30,6 +30,7 @@ import numpy as np
 import scipy.fft
 import scipy.signal
 import matplotlib.pyplot as plt
+from IPython.display import display
 '''.strip()
 
 
@@ -582,6 +583,122 @@ def plot_spectrum_if_mapping(
 '''.strip()
 
 
+EXPORTS = r'''
+def save_direction_figures(output_dir, direction, figures):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = direction.lower()
+    for name, figure in figures.items():
+        figure.savefig(
+            output_dir / f"{prefix}_{name}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+
+def save_all_results(output_dir, results, config):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    arrays = {"config_json": json.dumps(config, ensure_ascii=False)}
+    for direction, result in results.items():
+        prefix = direction.lower()
+        for key in (
+            "modes",
+            "center_freq_hz",
+            "reconstruction",
+            "nrmse",
+            "energy_fraction",
+            "frequency_bands_hz",
+        ):
+            arrays[f"{prefix}_{key}"] = result[key]
+    np.savez_compressed(output_dir / "stvmd_results.npz", **arrays)
+'''.strip()
+
+
+ANALYSIS = r'''
+def analyze_direction(direction, x, time_s, fs):
+    raw = run_dynamic_stvmd_batched(
+        x,
+        fs=fs,
+        K=K,
+        alpha=ALPHA,
+        window_length=WINDOW_LENGTH,
+        tau=TAU,
+        tol=TOL,
+        max_iters=MAX_ITERS,
+        batch_windows=BATCH_WINDOWS,
+    )
+    result = summarize_stvmd_result(x, fs, raw)
+    if not np.all(result["converged"]):
+        failed = np.flatnonzero(~result["converged"])
+        warnings.warn(
+            f"{direction}: 批次 {failed.tolist()} 达到最大迭代数；"
+            f"最大最终差值={result['final_diff'][failed].max():.3e}"
+        )
+    figures = {
+        "input_tf": plot_input_and_tf(
+            direction, x, time_s, fs, result, PLOT_MAX_HZ
+        ),
+        "modes": plot_modes(direction, time_s, result),
+        "if_reconstruction": plot_if_and_reconstruction(
+            direction, x, time_s, result, PLOT_MAX_HZ
+        ),
+        "spectrum_if_mapping": plot_spectrum_if_mapping(
+            direction, x, time_s, fs, result, PLOT_MAX_HZ
+        ),
+    }
+    for figure in figures.values():
+        display(figure)
+    return result, figures
+'''.strip()
+
+
+CONFIG = r'''
+# 用户可调参数。QUICK_TEST 仅供自动烟雾测试，正常运行时为 False。
+QUICK_TEST = os.environ.get("STVMD_QUICK_TEST") == "1"
+K = 3 if QUICK_TEST else 4
+ALPHA = 50.0
+WINDOW_LENGTH = 64
+TAU = 1e-5
+TOL = 1e-6 if QUICK_TEST else 1e-9
+MAX_ITERS = 20 if QUICK_TEST else 2000
+BATCH_WINDOWS = 64 if QUICK_TEST else 256
+PLOT_MAX_HZ = 200.0
+SAVE_OUTPUTS = False if QUICK_TEST else True
+
+print(
+    f"K={K}, alpha={ALPHA}, window={WINDOW_LENGTH}, "
+    f"batch={BATCH_WINDOWS}, max_iters={MAX_ITERS}"
+)
+'''.strip()
+
+
+LOAD_DATA = r'''
+DATA_FILES = {"5m": Path("5m.TXT"), "10m": Path("10m.TXT"), "15m": Path("15m.TXT")}
+records = {
+    distance: load_instantel_txt(path)
+    for distance, path in DATA_FILES.items()
+}
+signals, time_s = prepare_direction_inputs(records)
+fs = records["5m"].fs
+if QUICK_TEST:
+    trigger_index = int(round(records["5m"].pretrigger_seconds * fs))
+    quick_start = max(0, trigger_index - 128)
+    quick_stop = min(time_s.size, quick_start + 512)
+    signals = {
+        key: value[:, quick_start:quick_stop] for key, value in signals.items()
+    }
+    time_s = time_s[quick_start:quick_stop]
+
+print("采样率:", fs, "Hz")
+print("共同样本数:", time_s.size)
+print("时间范围:", (float(time_s[0]), float(time_s[-1])), "s")
+print("频率分辨率:", fs / WINDOW_LENGTH, "Hz")
+for distance, record in records.items():
+    print(distance, record.data.shape, record.metadata.get("Event Time", ""))
+'''.strip()
+
+
 def build():
     cells = [
         md(
@@ -590,16 +707,48 @@ def build():
         ),
         md("## 1. 参数配置"),
         core(IMPORTS),
+        new_code_cell(CONFIG),
         md("## 2. 数据读取与校验"),
         core(LOADER),
+        new_code_cell(LOAD_DATA),
         md("## 3. 动态多通道 STVMD"),
         core(STVMD),
         core(DIAGNOSTICS),
         core(PLOTTING),
+        core(EXPORTS),
+        core(ANALYSIS),
         md("## 4. Tran 方向"),
+        new_code_cell(
+            'results = {}\nfigures_by_direction = {}\n'
+            'results["Tran"], figures_by_direction["Tran"] = analyze_direction(\n'
+            '    "Tran", signals["Tran"], time_s, fs\n)'
+        ),
         md("## 5. Vert 方向"),
+        new_code_cell(
+            'results["Vert"], figures_by_direction["Vert"] = analyze_direction(\n'
+            '    "Vert", signals["Vert"], time_s, fs\n)'
+        ),
         md("## 6. Long 方向"),
+        new_code_cell(
+            'results["Long"], figures_by_direction["Long"] = analyze_direction(\n'
+            '    "Long", signals["Long"], time_s, fs\n)'
+        ),
         md("## 7. 结果保存"),
+        new_code_cell(
+            'OUTPUT_DIR = Path("output/stvmd_blast")\n'
+            'CONFIG_SNAPSHOT = {\n'
+            '    "K": K, "ALPHA": ALPHA, "WINDOW_LENGTH": WINDOW_LENGTH,\n'
+            '    "TAU": TAU, "TOL": TOL, "MAX_ITERS": MAX_ITERS,\n'
+            '    "BATCH_WINDOWS": BATCH_WINDOWS, "PLOT_MAX_HZ": PLOT_MAX_HZ,\n'
+            '}\n'
+            'if SAVE_OUTPUTS:\n'
+            '    for direction, direction_figures in figures_by_direction.items():\n'
+            '        save_direction_figures(OUTPUT_DIR, direction, direction_figures)\n'
+            '    save_all_results(OUTPUT_DIR, results, CONFIG_SNAPSHOT)\n'
+            '    print(f"结果已保存到: {OUTPUT_DIR.resolve()}")\n'
+            'else:\n'
+            '    print("SAVE_OUTPUTS=False：未写出结果文件。")'
+        ),
     ]
     notebook = new_notebook(
         cells=cells,
