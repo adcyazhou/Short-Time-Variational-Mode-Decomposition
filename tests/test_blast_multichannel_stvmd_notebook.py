@@ -5,6 +5,7 @@ import sys
 
 import nbformat
 import numpy as np
+import pandas as pd
 import pytest
 import matplotlib
 
@@ -80,6 +81,24 @@ def test_prepare_direction_inputs_truncates_to_common_length(tmp_path):
     assert signals["Tran"].shape == (3, 4)
     np.testing.assert_array_equal(signals["Tran"][:, 0], [0, 0, 0])
     assert time_s[0] == -0.5
+
+
+def test_convert_instantel_ascii_to_csv_uses_pandas(tmp_path):
+    ns = notebook_namespace()
+    source = tmp_path / "sample.TXT"
+    target = tmp_path / "data_csv" / "sample.csv"
+    source.write_text(instantel_text(), encoding="utf-8")
+    info = ns["convert_instantel_ascii_to_csv"](source, target)
+    frame = pd.read_csv(target)
+    assert info["fs"] == 4096
+    assert info["pretrigger_seconds"] == 0.5
+    assert frame.columns.tolist() == [
+        "Sample", "Time_s", "Tran", "Vert", "Long"
+    ]
+    assert frame["Time_s"].iloc[0] == -0.5
+    assert frame[["Tran", "Vert", "Long"]].to_numpy().tolist() == [
+        [1, 2, 3], [4, 5, 6]
+    ]
 
 
 def synthetic_multichannel(fs=128, n=256):

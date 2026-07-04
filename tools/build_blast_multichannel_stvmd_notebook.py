@@ -27,6 +27,7 @@ import re
 import warnings
 
 import numpy as np
+import pandas as pd
 import scipy.fft
 import scipy.signal
 import matplotlib.pyplot as plt
@@ -89,6 +90,48 @@ def load_instantel_txt(path):
         columns=("Tran", "Vert", "Long"),
         data=data,
     )
+
+
+def convert_instantel_ascii_to_csv(txt_path, csv_path):
+    txt_path, csv_path = Path(txt_path), Path(csv_path)
+    if not txt_path.is_file():
+        raise FileNotFoundError(f"找不到输入文件: {txt_path}")
+    lines = txt_path.read_text(
+        encoding="utf-8-sig", errors="replace"
+    ).splitlines()
+    metadata, header_index = {}, None
+    for index, raw in enumerate(lines):
+        stripped = raw.strip().strip('"')
+        if all(name in stripped for name in ("Tran", "Vert", "Long")):
+            header_index = index
+            break
+        if ":" in stripped:
+            key, value = stripped.split(":", 1)
+            metadata[key.strip()] = value.strip()
+    if header_index is None:
+        raise ValueError(f"{txt_path.name}: 未找到 Tran/Vert/Long 表头")
+    fs = _metadata_number(metadata, "Sample Rate")
+    pretrigger = abs(_metadata_number(metadata, "Pre-trigger Length"))
+    frame = pd.read_csv(
+        txt_path,
+        sep=r"\s+",
+        skiprows=header_index + 1,
+        names=["Tran", "Vert", "Long"],
+        engine="python",
+    )
+    if frame.shape[1] != 3 or frame.isna().any().any():
+        raise ValueError(f"{txt_path.name}: 数值区不是有效的三列数据")
+    frame.insert(
+        0, "Time_s", np.arange(len(frame)) / fs - pretrigger
+    )
+    frame.insert(0, "Sample", np.arange(len(frame), dtype=int))
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(csv_path, index=False)
+    return {
+        "fs": fs,
+        "pretrigger_seconds": pretrigger,
+        "metadata": metadata,
+    }
 
 
 def prepare_direction_inputs(records):
