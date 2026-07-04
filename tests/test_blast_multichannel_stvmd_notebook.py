@@ -101,6 +101,22 @@ def test_convert_instantel_ascii_to_csv_uses_pandas(tmp_path):
     ]
 
 
+def test_generated_notebook_embeds_original_stvmd_source_verbatim():
+    generated = nbformat.read(NOTEBOOK, as_version=4)
+    source = nbformat.read(ROOT / "main_STVMD.ipynb", as_version=4)
+    copied = [
+        cell.source for cell in generated.cells
+        if "original-stvmd" in cell.metadata.get("tags", [])
+    ]
+    assert copied == [source.cells[index].source for index in (0, 1, 3)]
+    joined = "\n".join(copied)
+    assert "@jit(nopython=True, cache=True)" in joined
+    assert "self.hop_len = 1" in joined
+    assert "tqdm" in joined
+    assert "def apply_dynamic" in joined
+    assert "run_dynamic_stvmd_batched" not in joined
+
+
 def synthetic_multichannel(fs=128, n=256):
     t = np.arange(n) / fs
     base_1 = np.sin(2 * np.pi * 20 * t)

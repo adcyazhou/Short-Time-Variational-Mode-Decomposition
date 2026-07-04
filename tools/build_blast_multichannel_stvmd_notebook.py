@@ -26,11 +26,7 @@ import os
 import re
 import warnings
 
-import numpy as np
 import pandas as pd
-import scipy.fft
-import scipy.signal
-import matplotlib.pyplot as plt
 from IPython.display import display
 '''.strip()
 
@@ -743,19 +739,29 @@ for distance, record in records.items():
 
 
 def build():
+    source_notebook = nbformat.read(ROOT / "main_STVMD.ipynb", as_version=4)
+    original_cells = [
+        new_code_cell(
+            source_notebook.cells[index].source,
+            metadata={"tags": ["core", "original-stvmd"]},
+        )
+        for index in (0, 1, 3)
+    ]
     cells = [
         md(
             "# 单孔漏斗爆破：多通道动态 STVMD 分析\n\n"
             "本 Notebook 以仓库算法及其对应论文为主，按步长1对三个方向分别分析。"
         ),
         md("## 1. 参数配置"),
+        original_cells[0],
         core(IMPORTS),
         new_code_cell(CONFIG),
         md("## 2. 数据读取与校验"),
         core(LOADER),
         new_code_cell(LOAD_DATA),
         md("## 3. 动态多通道 STVMD"),
-        core(STVMD),
+        original_cells[1],
+        original_cells[2],
         core(DIAGNOSTICS),
         core(PLOTTING),
         core(EXPORTS),
