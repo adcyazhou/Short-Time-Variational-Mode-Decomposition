@@ -151,6 +151,29 @@ def prepare_direction_inputs(records):
         )
     time_s = np.arange(common_n) / fs_values[0] - pre_values[0]
     return signals, time_s
+
+
+def load_csv_direction_inputs(csv_paths):
+    order = ("5m", "10m", "15m")
+    required = {"Sample", "Time_s", "Tran", "Vert", "Long"}
+    frames = {}
+    for key in order:
+        if key not in csv_paths:
+            raise ValueError(f"缺少CSV路径: {key}")
+        frame = pd.read_csv(csv_paths[key])
+        if not required.issubset(frame.columns):
+            raise ValueError(f"{csv_paths[key]}: CSV列不完整")
+        frames[key] = frame
+    common_n = min(len(frame) for frame in frames.values())
+    signals = {
+        direction: np.vstack([
+            frames[key][direction].to_numpy(float)[:common_n]
+            for key in order
+        ])
+        for direction in ("Tran", "Vert", "Long")
+    }
+    time_s = frames["5m"]["Time_s"].to_numpy(float)[:common_n]
+    return frames, signals, time_s
 '''.strip()
 
 
@@ -419,6 +442,50 @@ def summarize_stvmd_result(x, fs, raw_result):
 '''.strip()
 
 
+ORIGINAL_ADAPTER = r'''
+def estimate_original_stvmd_memory_gb(
+    channels, samples, K, window_length, max_iters
+):
+    freq_bins = window_length // 2 + 1
+    complex_bytes = 16
+    float_bytes = 8
+    u_bytes = 2 * channels * freq_bins * K * samples * complex_bytes
+    lambda_bytes = 2 * channels * freq_bins * samples * complex_bytes
+    omega_bytes = max_iters * K * samples * float_bytes
+    return (u_bytes + lambda_bytes + omega_bytes) / (1024 ** 3)
+
+
+def run_original_stvmd(
+    x, fs, K=4, alpha=50.0, window_length=64,
+    tau=1e-5, tol=1e-9, max_iters=2000,
+):
+    x = np.asarray(x, dtype=float)
+    if x.ndim != 2 or not np.isfinite(x).all():
+        raise ValueError("输入必须为有限的 (通道, 时间) 二维数组")
+    window = scipy.signal.windows.hamming(window_length, sym=False)
+    model = STVMD(
+        num_channel=x.shape[0],
+        window_func=window,
+        alpha=alpha,
+        n_fft=window_length,
+        K=K,
+        tol=tol,
+        tau=tau,
+        maxiters=max_iters,
+    )
+    f_hat_s, windowed = model.prepare_offline(x)
+    u_hat, omega = model.apply(f_hat_s, dynamic=True)
+    modes = model.postprocess(u_hat)
+    return {
+        "modes": modes,
+        "u_hat": u_hat,
+        "center_freq_hz": omega * (fs / 2.0),
+        "mean_tf_power": np.mean(np.abs(f_hat_s) ** 2, axis=0),
+        "windowed_signal": windowed,
+    }
+'''.strip()
+
+
 PLOTTING = r'''
 DISTANCE_LABELS = ("5 m", "10 m", "15 m")
 MODE_COLORS = ("#64748b", "#0072B2", "#D55E00", "#009E73", "#CC79A7")
@@ -656,7 +723,7 @@ def save_all_results(output_dir, results, config):
 
 ANALYSIS = r'''
 def analyze_direction(direction, x, time_s, fs):
-    raw = run_dynamic_stvmd_batched(
+    raw = run_original_stvmd(
         x,
         fs=fs,
         K=K,
@@ -665,15 +732,8 @@ def analyze_direction(direction, x, time_s, fs):
         tau=TAU,
         tol=TOL,
         max_iters=MAX_ITERS,
-        batch_windows=BATCH_WINDOWS,
     )
     result = summarize_stvmd_result(x, fs, raw)
-    if not np.all(result["converged"]):
-        failed = np.flatnonzero(~result["converged"])
-        warnings.warn(
-            f"{direction}: 批次 {failed.tolist()} 达到最大迭代数；"
-            f"最大最终差值={result['final_diff'][failed].max():.3e}"
-        )
     figures = {
         "input_tf": plot_input_and_tf(
             direction, x, time_s, fs, result, PLOT_MAX_HZ
@@ -697,33 +757,47 @@ CONFIG = r'''
 QUICK_TEST = os.environ.get("STVMD_QUICK_TEST") == "1"
 K = 3 if QUICK_TEST else 4
 ALPHA = 50.0
-WINDOW_LENGTH = 64
+WINDOW_LENGTH = 16 if QUICK_TEST else 64
 TAU = 1e-5
 TOL = 1e-6 if QUICK_TEST else 1e-9
-MAX_ITERS = 20 if QUICK_TEST else 2000
-BATCH_WINDOWS = 64 if QUICK_TEST else 256
+MAX_ITERS = 5 if QUICK_TEST else 2000
 PLOT_MAX_HZ = 200.0
 SAVE_OUTPUTS = False if QUICK_TEST else True
 
 print(
     f"K={K}, alpha={ALPHA}, window={WINDOW_LENGTH}, "
-    f"batch={BATCH_WINDOWS}, max_iters={MAX_ITERS}"
+    f"max_iters={MAX_ITERS}"
 )
 '''.strip()
 
 
 LOAD_DATA = r'''
-DATA_FILES = {"5m": Path("5m.TXT"), "10m": Path("10m.TXT"), "15m": Path("15m.TXT")}
-records = {
-    distance: load_instantel_txt(path)
-    for distance, path in DATA_FILES.items()
+DATA_FILES = {
+    "5m": Path("5m.TXT"),
+    "10m": Path("10m.TXT"),
+    "15m": Path("15m.TXT"),
 }
-signals, time_s = prepare_direction_inputs(records)
-fs = records["5m"].fs
+CSV_DIR = Path("data_csv")
+CSV_PATHS = {
+    distance: CSV_DIR / f"{distance}.csv" for distance in DATA_FILES
+}
+conversion_info = {
+    distance: convert_instantel_ascii_to_csv(
+        DATA_FILES[distance], CSV_PATHS[distance]
+    )
+    for distance in DATA_FILES
+}
+fs_values = [conversion_info[key]["fs"] for key in ("5m", "10m", "15m")]
+if not np.allclose(fs_values, fs_values[0]):
+    raise ValueError(f"采样率不一致: {fs_values}")
+fs = fs_values[0]
+frames, signals, time_s = load_csv_direction_inputs(CSV_PATHS)
 if QUICK_TEST:
-    trigger_index = int(round(records["5m"].pretrigger_seconds * fs))
+    trigger_index = int(round(
+        conversion_info["5m"]["pretrigger_seconds"] * fs
+    ))
     quick_start = max(0, trigger_index - 128)
-    quick_stop = min(time_s.size, quick_start + 512)
+    quick_stop = min(time_s.size, quick_start + 256)
     signals = {
         key: value[:, quick_start:quick_stop] for key, value in signals.items()
     }
@@ -733,8 +807,18 @@ print("采样率:", fs, "Hz")
 print("共同样本数:", time_s.size)
 print("时间范围:", (float(time_s[0]), float(time_s[-1])), "s")
 print("频率分辨率:", fs / WINDOW_LENGTH, "Hz")
-for distance, record in records.items():
-    print(distance, record.data.shape, record.metadata.get("Event Time", ""))
+for distance, frame in frames.items():
+    event_time = conversion_info[distance]["metadata"].get("Event Time", "")
+    print(distance, frame.shape, event_time, CSV_PATHS[distance])
+'''.strip()
+
+
+MEMORY_NOTE = r'''
+estimated_memory_gb = estimate_original_stvmd_memory_gb(
+    3, time_s.size, K, WINDOW_LENGTH, MAX_ITERS
+)
+print(f"原算法粗略内存估算: {estimated_memory_gb:.2f} GB")
+print("说明：原仓库算法一次处理全部滑窗，不使用分批优化。")
 '''.strip()
 
 
@@ -750,22 +834,39 @@ def build():
     cells = [
         md(
             "# 单孔漏斗爆破：多通道动态 STVMD 分析\n\n"
-            "本 Notebook 以仓库算法及其对应论文为主，按步长1对三个方向分别分析。"
+            "本 Notebook 使用 pandas 将Instantel ASCII文件转换为CSV，"
+            "并逐字嵌入 `main_STVMD.ipynb` 的Numba辅助函数和STVMD类。"
+            "Tran、Vert、Long均以5m/10m/15m作为三个通道，步长固定为1。"
         ),
-        md("## 1. 参数配置"),
+        md(
+            "## 1. 参数配置\n\n"
+            "K、α、时窗长度和最大迭代数可在下方修改。完整原算法不分批，"
+            "较大的 `MAX_ITERS` 会显著增加中心频率历史数组的内存。"
+        ),
         original_cells[0],
         core(IMPORTS),
         new_code_cell(CONFIG),
-        md("## 2. 数据读取与校验"),
+        md(
+            "## 2. pandas转换CSV并读取\n\n"
+            "三份TXT的数值区转换为 `data_csv/*.csv`，列为 "
+            "`Sample, Time_s, Tran, Vert, Long`；随后只从CSV组装分析数组。"
+        ),
         core(LOADER),
         new_code_cell(LOAD_DATA),
-        md("## 3. 动态多通道 STVMD"),
+        md(
+            "## 3. 原仓库动态多通道 STVMD\n\n"
+            "下面三个标记单元逐字来自 `main_STVMD.ipynb`。Numba仅加速"
+            "缓冲、反缓冲和窗归一化函数；动态迭代由原NumPy循环执行，"
+            "`tqdm`显示迭代进度。未使用分批优化。"
+        ),
         original_cells[1],
         original_cells[2],
+        core(ORIGINAL_ADAPTER),
         core(DIAGNOSTICS),
         core(PLOTTING),
         core(EXPORTS),
         core(ANALYSIS),
+        new_code_cell(MEMORY_NOTE),
         md("## 4. Tran 方向"),
         new_code_cell(
             'results = {}\nfigures_by_direction = {}\n'
@@ -788,7 +889,7 @@ def build():
             'CONFIG_SNAPSHOT = {\n'
             '    "K": K, "ALPHA": ALPHA, "WINDOW_LENGTH": WINDOW_LENGTH,\n'
             '    "TAU": TAU, "TOL": TOL, "MAX_ITERS": MAX_ITERS,\n'
-            '    "BATCH_WINDOWS": BATCH_WINDOWS, "PLOT_MAX_HZ": PLOT_MAX_HZ,\n'
+            '    "PLOT_MAX_HZ": PLOT_MAX_HZ,\n'
             '}\n'
             'if SAVE_OUTPUTS:\n'
             '    for direction, direction_figures in figures_by_direction.items():\n'
