@@ -3,8 +3,11 @@ import os
 import subprocess
 import sys
 
+os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
+
 import nbformat
 import numpy as np
+import pandas as pd
 import pytest
 import matplotlib
 
@@ -82,6 +85,40 @@ def test_prepare_direction_inputs_truncates_to_common_length(tmp_path):
     assert time_s[0] == -0.5
 
 
+def test_convert_instantel_ascii_to_csv_uses_pandas(tmp_path):
+    ns = notebook_namespace()
+    source = tmp_path / "sample.TXT"
+    target = tmp_path / "data_csv" / "sample.csv"
+    source.write_text(instantel_text(), encoding="utf-8")
+    info = ns["convert_instantel_ascii_to_csv"](source, target)
+    frame = pd.read_csv(target)
+    assert info["fs"] == 4096
+    assert info["pretrigger_seconds"] == 0.5
+    assert frame.columns.tolist() == [
+        "Sample", "Time_s", "Tran", "Vert", "Long"
+    ]
+    assert frame["Time_s"].iloc[0] == -0.5
+    assert frame[["Tran", "Vert", "Long"]].to_numpy().tolist() == [
+        [1, 2, 3], [4, 5, 6]
+    ]
+
+
+def test_generated_notebook_embeds_original_stvmd_source_verbatim():
+    generated = nbformat.read(NOTEBOOK, as_version=4)
+    source = nbformat.read(ROOT / "main_STVMD.ipynb", as_version=4)
+    copied = [
+        cell.source for cell in generated.cells
+        if "original-stvmd" in cell.metadata.get("tags", [])
+    ]
+    assert copied == [source.cells[index].source for index in (0, 1, 3)]
+    joined = "\n".join(copied)
+    assert "@jit(nopython=True, cache=True)" in joined
+    assert "self.hop_len = 1" in joined
+    assert "tqdm" in joined
+    assert "def apply_dynamic" in joined
+    assert "run_dynamic_stvmd_batched" not in joined
+
+
 def synthetic_multichannel(fs=128, n=256):
     t = np.arange(n) / fs
     base_1 = np.sin(2 * np.pi * 20 * t)
@@ -95,60 +132,44 @@ def synthetic_multichannel(fs=128, n=256):
     )
 
 
-def test_validate_config_rejects_non_repository_window():
+def test_load_csv_direction_inputs_truncates_and_orders_channels(tmp_path):
     ns = notebook_namespace()
-    with pytest.raises(ValueError, match="WINDOW_LENGTH"):
-        ns["validate_config"](3, 50.0, 512, 16, 50)
+    paths = {}
+    for distance, n, offset in (("5m", 7, 0), ("10m", 4, 100), ("15m", 6, 200)):
+        frame = pd.DataFrame({
+            "Sample": np.arange(n),
+            "Time_s": np.arange(n) / 4096 - 0.5,
+            "Tran": np.arange(n) + offset,
+            "Vert": np.arange(n) + offset + 10,
+            "Long": np.arange(n) + offset + 20,
+        })
+        paths[distance] = tmp_path / f"{distance}.csv"
+        frame.to_csv(paths[distance], index=False)
+    _, signals, time_s = ns["load_csv_direction_inputs"](paths)
+    assert signals["Tran"].shape == (3, 4)
+    np.testing.assert_array_equal(signals["Tran"][:, 0], [0, 100, 200])
+    assert time_s[0] == -0.5
 
 
-def test_batched_dynamic_stvmd_returns_finite_aligned_results():
+def test_original_stvmd_adapter_returns_expected_shapes():
     ns = notebook_namespace()
-    x = synthetic_multichannel(n=128)
-    result = ns["run_dynamic_stvmd_batched"](
-        x,
-        fs=128,
-        K=3,
-        alpha=50.0,
-        window_length=32,
-        tau=1e-5,
-        tol=1e-6,
-        max_iters=80,
-        batch_windows=17,
+    x = synthetic_multichannel(n=64)
+    result = ns["run_original_stvmd"](
+        x, fs=128, K=3, alpha=50.0, window_length=16,
+        tau=1e-5, tol=1e-5, max_iters=8,
     )
-    assert result["modes"].shape == (3, 3, 128)
-    assert result["center_freq_hz"].shape == (3, 128)
-    assert result["mean_tf_power"].shape == (17, 128)
+    assert result["modes"].shape == (3, 3, 64)
+    assert result["center_freq_hz"].shape == (3, 64)
+    assert result["mean_tf_power"].shape == (9, 64)
     assert np.isfinite(result["modes"]).all()
-    assert np.isfinite(result["center_freq_hz"]).all()
-    np.testing.assert_allclose(result["center_freq_hz"][0], 0.0)
-
-
-def test_single_batch_and_split_batches_agree():
-    ns = notebook_namespace()
-    x = synthetic_multichannel(n=96)
-    kwargs = dict(
-        fs=128,
-        K=3,
-        alpha=50.0,
-        window_length=32,
-        tau=1e-5,
-        tol=1e-7,
-        max_iters=100,
-    )
-    whole = ns["run_dynamic_stvmd_batched"](x, batch_windows=96, **kwargs)
-    split = ns["run_dynamic_stvmd_batched"](x, batch_windows=13, **kwargs)
-    np.testing.assert_allclose(
-        split["center_freq_hz"], whole["center_freq_hz"], atol=2e-3
-    )
-    np.testing.assert_allclose(split["modes"], whole["modes"], atol=2e-3)
 
 
 def test_summarize_result_reports_reconstruction_and_bands():
     ns = notebook_namespace()
     x = synthetic_multichannel(n=128)
-    raw = ns["run_dynamic_stvmd_batched"](
-        x, fs=128, K=3, alpha=50.0, window_length=32,
-        tau=1e-5, tol=1e-6, max_iters=80, batch_windows=19,
+    raw = ns["run_original_stvmd"](
+        x, fs=128, K=3, alpha=50.0, window_length=16,
+        tau=1e-5, tol=1e-5, max_iters=8,
     )
     summary = ns["summarize_stvmd_result"](x, 128, raw)
     assert summary["reconstruction"].shape == x.shape
@@ -171,9 +192,9 @@ def test_power_to_db_has_zero_db_maximum():
 
 def diagnostic_fixture(ns):
     x = synthetic_multichannel(n=128)
-    raw = ns["run_dynamic_stvmd_batched"](
-        x, fs=128, K=3, alpha=50.0, window_length=32,
-        tau=1e-5, tol=1e-6, max_iters=80, batch_windows=19,
+    raw = ns["run_original_stvmd"](
+        x, fs=128, K=3, alpha=50.0, window_length=16,
+        tau=1e-5, tol=1e-5, max_iters=8,
     )
     return x, ns["summarize_stvmd_result"](x, 128, raw)
 
