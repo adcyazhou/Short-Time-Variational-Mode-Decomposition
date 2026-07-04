@@ -847,7 +847,7 @@ def build():
         core(IMPORTS),
         new_code_cell(CONFIG),
         md(
-            "## 2. pandas转换CSV并读取\n\n"
+            "## 2. 数据读取与校验：pandas转换CSV\n\n"
             "三份TXT的数值区转换为 `data_csv/*.csv`，列为 "
             "`Sample, Time_s, Tran, Vert, Long`；随后只从CSV组装分析数组。"
         ),
