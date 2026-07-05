@@ -190,6 +190,84 @@ def test_modal_metrics_include_residual_and_sum_to_one():
     assert metrics["energy_fraction"].sum() == pytest.approx(1.0)
 
 
+def synthetic_result(namespace):
+    fs = 128.0
+    time_s = np.arange(64) / fs - 0.25
+    modes = np.stack(
+        [
+            0.2 * np.ones(64),
+            np.sin(2 * np.pi * 10 * (time_s + 0.25)),
+            0.5 * np.sin(2 * np.pi * 20 * (time_s + 0.25)),
+        ]
+    )[:, None, :]
+    result = namespace["modal_metrics"](modes, fs)
+    result.update(
+        {
+            "modes": modes,
+            "center_frequency_hz": np.array([0.0, 10.0, 20.0]),
+        }
+    )
+    return time_s, fs, result
+
+
+def test_each_method_has_exactly_three_requested_figures():
+    namespace = notebook_namespace()
+    time_s, fs, result = synthetic_result(namespace)
+    figures = namespace["plot_method_results"](
+        "VMD", time_s, fs, result, plot_max_hz=50.0
+    )
+    assert set(figures) == {
+        "time_modes",
+        "frequency_modes",
+        "energy_fraction",
+    }
+    assert len(figures["time_modes"].axes) == 3
+    assert len(figures["frequency_modes"].axes) == 3
+    assert len(figures["energy_fraction"].axes) == 1
+    for figure in figures.values():
+        matplotlib.pyplot.close(figure)
+
+
+def test_save_analysis_writes_six_pngs_and_npz(tmp_path):
+    namespace = notebook_namespace()
+    time_s, fs, vmd_result = synthetic_result(namespace)
+    _, _, stvmd_result = synthetic_result(namespace)
+    waveform = namespace["SingleWaveform"](
+        path=tmp_path / "single.TXT",
+        metadata={},
+        fs=fs,
+        pretrigger_seconds=0.25,
+        direction="Tran",
+        time_s=time_s,
+        values=np.sum(vmd_result["modes"][:, 0], axis=0),
+    )
+    vmd_figures = namespace["plot_method_results"](
+        "VMD", time_s, fs, vmd_result, 50.0
+    )
+    stvmd_figures = namespace["plot_method_results"](
+        "STVMD", time_s, fs, stvmd_result, 50.0
+    )
+    namespace["save_analysis"](
+        tmp_path,
+        waveform,
+        vmd_result,
+        stvmd_result,
+        vmd_figures,
+        stvmd_figures,
+        parameters={"K": 3},
+    )
+    assert len(list(tmp_path.glob("*.png"))) == 6
+    saved = np.load(
+        tmp_path / "vmd_stvmd_single_waveform_results.npz"
+    )
+    assert saved["vmd_modes"].shape == (3, 1, 64)
+    assert saved["stvmd_modes"].shape == (3, 1, 64)
+    assert saved["vmd_energy_fraction"].sum() == pytest.approx(1.0)
+    assert saved["stvmd_energy_fraction"].sum() == pytest.approx(1.0)
+    for figure in (*vmd_figures.values(), *stvmd_figures.values()):
+        matplotlib.pyplot.close(figure)
+
+
 def test_generator_regeneration_preserves_notebook_contract():
     before = NOTEBOOK.read_bytes()
 
@@ -224,6 +302,8 @@ def test_generator_regeneration_preserves_notebook_contract():
             ["core", "original-algorithm-source"],
         ),
         ("analysis-core", ["core"]),
+        ("plotting", ["core"]),
+        ("saving", ["core"]),
     ]
 
 

@@ -341,6 +341,130 @@ def add_modal_metrics(raw_result, fs):
 '''.strip()
 
 
+PLOTTING = r'''
+def component_label(index):
+    return "Residual" if index == 0 else f"Mode {index}"
+
+
+def plot_modal_time(method, time_s, result):
+    modes = result["modes"][:, 0, :]
+    figure, axes = plt.subplots(
+        modes.shape[0],
+        1,
+        figsize=(11, 2.0 * modes.shape[0]),
+        sharex=True,
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+    for index, axis in enumerate(axes):
+        axis.plot(time_s, modes[index], lw=0.75)
+        axis.axvline(0.0, color="black", ls="--", lw=0.6)
+        axis.set_ylabel(f"{component_label(index)}\n(mm/s)")
+    axes[0].set_title(f"{method}: modal time histories")
+    axes[-1].set_xlabel("Time (s)")
+    return figure
+
+
+def plot_modal_frequency(method, fs, result, plot_max_hz):
+    amplitude = result["amplitude"]
+    frequency_hz = result["frequency_hz"]
+    figure, axes = plt.subplots(
+        amplitude.shape[0],
+        1,
+        figsize=(11, 2.0 * amplitude.shape[0]),
+        sharex=True,
+        constrained_layout=True,
+    )
+    axes = np.atleast_1d(axes)
+    for index, axis in enumerate(axes):
+        axis.plot(frequency_hz, amplitude[index], lw=0.8)
+        axis.set_ylabel(f"{component_label(index)}\n(mm/s)")
+        axis.set_xlim(0.0, min(float(plot_max_hz), fs / 2.0))
+    axes[0].set_title(f"{method}: modal amplitude spectra")
+    axes[-1].set_xlabel("Frequency (Hz)")
+    return figure
+
+
+def plot_energy_fraction(method, result):
+    fractions = result["energy_fraction"]
+    positions = np.arange(fractions.size)
+    figure, axis = plt.subplots(
+        1, 1, figsize=(10, 4.5), constrained_layout=True
+    )
+    bars = axis.bar(positions, fractions)
+    axis.set_xticks(
+        positions,
+        [component_label(index) for index in positions],
+    )
+    axis.set(
+        xlabel="Component",
+        ylabel="Energy fraction",
+        title=f"{method}: modal energy fractions",
+    )
+    axis.bar_label(bars, fmt="%.3f")
+    return figure
+
+
+def plot_method_results(method, time_s, fs, result, plot_max_hz):
+    return {
+        "time_modes": plot_modal_time(method, time_s, result),
+        "frequency_modes": plot_modal_frequency(
+            method, fs, result, plot_max_hz
+        ),
+        "energy_fraction": plot_energy_fraction(method, result),
+    }
+'''.strip()
+
+
+SAVING = r'''
+def save_analysis(
+    output_dir,
+    waveform,
+    vmd_result,
+    stvmd_result,
+    vmd_figures,
+    stvmd_figures,
+    parameters,
+):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for method, figures in (
+        ("vmd", vmd_figures),
+        ("stvmd", stvmd_figures),
+    ):
+        for name, figure in figures.items():
+            figure.savefig(
+                output_dir / f"{method}_{name}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+    np.savez_compressed(
+        output_dir / "vmd_stvmd_single_waveform_results.npz",
+        input_file=str(waveform.path),
+        direction=waveform.direction,
+        fs=waveform.fs,
+        time_s=waveform.time_s,
+        input_velocity=waveform.values,
+        vmd_modes=vmd_result["modes"],
+        vmd_frequency_hz=vmd_result["frequency_hz"],
+        vmd_amplitude=vmd_result["amplitude"],
+        vmd_energy=vmd_result["energy"],
+        vmd_energy_fraction=vmd_result["energy_fraction"],
+        vmd_center_frequency_hz=vmd_result["center_frequency_hz"],
+        stvmd_modes=stvmd_result["modes"],
+        stvmd_frequency_hz=stvmd_result["frequency_hz"],
+        stvmd_amplitude=stvmd_result["amplitude"],
+        stvmd_energy=stvmd_result["energy"],
+        stvmd_energy_fraction=stvmd_result["energy_fraction"],
+        stvmd_center_frequency_hz=stvmd_result["center_frequency_hz"],
+        parameter_names=np.asarray(list(parameters), dtype=str),
+        parameter_values=np.asarray(
+            [str(value) for value in parameters.values()], dtype=str
+        ),
+    )
+'''.strip()
+
+
 def build():
     notebook = v4.new_notebook(
         cells=[
@@ -367,6 +491,8 @@ def build():
                 tags=("core", "original-algorithm-source"),
             ),
             code(ANALYSIS_CORE, "analysis-core", tags=("core",)),
+            code(PLOTTING, "plotting", tags=("core",)),
+            code(SAVING, "saving", tags=("core",)),
         ],
         metadata={
             "kernelspec": {
