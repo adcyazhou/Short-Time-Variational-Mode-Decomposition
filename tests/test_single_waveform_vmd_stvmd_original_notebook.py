@@ -136,6 +136,60 @@ def test_fresh_loader_rejects_invalid_sample_rate(tmp_path, fs):
         notebook_namespace()["load_single_waveform"](path, "Vert")
 
 
+def test_original_adapters_return_full_length_modes():
+    namespace = notebook_namespace()
+    fs = 128.0
+    time_s = np.arange(64) / fs
+    values = np.sin(2 * np.pi * 20 * time_s).reshape(1, -1)
+    common = dict(
+        fs=fs,
+        K=3,
+        alpha=50.0,
+        tau=1e-5,
+        tol=1e-4,
+        max_iters=4,
+    )
+    vmd = namespace["run_original_vmd"](
+        values, n_fft=16, **common
+    )
+    stvmd = namespace["run_original_stvmd"](
+        values, window_length=16, **common
+    )
+    assert vmd["modes"].shape == (3, 1, 64)
+    assert vmd["center_frequency_hz"].shape == (3,)
+    assert stvmd["modes"].shape == (3, 1, 64)
+    assert stvmd["center_frequency_hz"].shape == (3, 64)
+    assert stvmd["dynamic"] is True
+    assert stvmd["hop_length"] == 1
+
+
+def test_single_sided_amplitude_has_physical_units():
+    namespace = notebook_namespace()
+    fs = 128.0
+    time_s = np.arange(128) / fs
+    modes = np.zeros((2, 1, 128))
+    modes[0, 0] = 2.0 * np.sin(2 * np.pi * 10 * time_s)
+    frequency_hz, amplitude = namespace["single_sided_amplitude"](
+        modes, fs
+    )
+    peak = np.argmin(np.abs(frequency_hz - 10.0))
+    assert amplitude[0, peak] == pytest.approx(2.0)
+
+
+def test_modal_metrics_include_residual_and_sum_to_one():
+    namespace = notebook_namespace()
+    modes = np.array(
+        [
+            [[1.0, 1.0, 1.0, 1.0]],
+            [[2.0, 2.0, 2.0, 2.0]],
+        ]
+    )
+    metrics = namespace["modal_metrics"](modes, fs=8.0)
+    np.testing.assert_allclose(metrics["energy"], [4.0, 16.0])
+    np.testing.assert_allclose(metrics["energy_fraction"], [0.2, 0.8])
+    assert metrics["energy_fraction"].sum() == pytest.approx(1.0)
+
+
 def test_generator_regeneration_preserves_notebook_contract():
     before = NOTEBOOK.read_bytes()
 
@@ -169,6 +223,7 @@ def test_generator_regeneration_preserves_notebook_contract():
             "original-stvmd-source",
             ["core", "original-algorithm-source"],
         ),
+        ("analysis-core", ["core"]),
     ]
 
 

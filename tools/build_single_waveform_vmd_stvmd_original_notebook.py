@@ -173,6 +173,174 @@ def load_single_waveform(path, direction):
 '''.strip()
 
 
+ANALYSIS_CORE = r'''
+def validate_config(
+    waveform,
+    K,
+    alpha,
+    tau,
+    tol,
+    max_iters,
+    vmd_n_fft,
+    stvmd_window_length,
+    plot_max_hz,
+):
+    if waveform.values.ndim != 1 or not np.isfinite(waveform.values).all():
+        raise ValueError("Waveform must be a finite one-dimensional array")
+    if not isinstance(K, (int, np.integer)) or K < 2:
+        raise ValueError("K must be an integer not smaller than 2")
+    if not isinstance(max_iters, (int, np.integer)) or max_iters < 2:
+        raise ValueError("MAX_ITERS must be an integer not smaller than 2")
+    if not isinstance(vmd_n_fft, (int, np.integer)) or vmd_n_fft < 2:
+        raise ValueError("VMD_N_FFT must be an integer not smaller than 2")
+    if (
+        not isinstance(stvmd_window_length, (int, np.integer))
+        or stvmd_window_length < 2
+        or stvmd_window_length > waveform.values.size
+    ):
+        raise ValueError(
+            "STVMD_WINDOW_LENGTH must be between 2 and the sample count"
+        )
+    for name, value in (
+        ("ALPHA", alpha),
+        ("TAU", tau),
+        ("TOL", tol),
+        ("PLOT_MAX_HZ", plot_max_hz),
+    ):
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a finite positive number")
+
+
+def estimate_vmd_memory_gb(channels, samples, K, n_fft, max_iters):
+    padded = samples + n_fft - 1
+    bins = padded // 2 + 1
+    bytes_total = (
+        max_iters * channels * bins * K * 16
+        + max_iters * channels * bins * 16
+        + max_iters * K * 8
+    )
+    return bytes_total / (1024 ** 3)
+
+
+def estimate_stvmd_memory_gb(
+    channels, samples, K, window_length, max_iters
+):
+    frames = samples
+    bins = window_length // 2 + 1
+    bytes_total = (
+        2 * channels * bins * K * frames * 16
+        + 2 * channels * bins * frames * 16
+        + frames * channels * bins * 16
+        + max_iters * K * frames * 8
+    )
+    return bytes_total / (1024 ** 3), frames
+
+
+def run_original_vmd(
+    x,
+    fs,
+    K=4,
+    alpha=50.0,
+    tau=1e-5,
+    tol=1e-9,
+    max_iters=1000,
+    n_fft=64,
+):
+    x = np.asarray(x, dtype=float)
+    model = VMD(
+        num_channel=x.shape[0],
+        n_fft=n_fft,
+        alpha=alpha,
+        K=K,
+        tol=tol,
+        tau=tau,
+        maxiters=max_iters,
+    )
+    f_hat = model.prepare_offline(x)
+    mode_spectrum, omega = model.apply(f_hat)
+    modes = model.postprocess(mode_spectrum)
+    return {
+        "modes": modes,
+        "mode_spectrum": mode_spectrum,
+        "center_frequency_hz": omega * (fs / 2.0),
+        "dynamic": False,
+    }
+
+
+def run_original_stvmd(
+    x,
+    fs,
+    K=4,
+    alpha=50.0,
+    tau=1e-5,
+    tol=1e-9,
+    max_iters=1000,
+    window_length=512,
+):
+    x = np.asarray(x, dtype=float)
+    window = scipy.signal.windows.hamming(
+        window_length, sym=False
+    )
+    model = STVMD(
+        num_channel=x.shape[0],
+        n_fft=window_length,
+        window_func=window,
+        alpha=alpha,
+        K=K,
+        tol=tol,
+        tau=tau,
+        maxiters=max_iters,
+    )
+    f_hat, windowed = model.prepare_offline(x)
+    mode_spectrum, omega = model.apply(f_hat, dynamic=True)
+    modes = model.postprocess(mode_spectrum)
+    return {
+        "modes": modes,
+        "mode_spectrum": mode_spectrum,
+        "center_frequency_hz": omega * (fs / 2.0),
+        "windowed_signal": windowed,
+        "dynamic": True,
+        "hop_length": model.hop_len,
+    }
+
+
+def single_sided_amplitude(modes, fs):
+    values = np.asarray(modes, dtype=float)[:, 0, :]
+    sample_count = values.shape[-1]
+    spectrum = np.fft.rfft(values, axis=-1)
+    amplitude = np.abs(spectrum) / sample_count
+    if sample_count % 2 == 0:
+        amplitude[:, 1:-1] *= 2.0
+    else:
+        amplitude[:, 1:] *= 2.0
+    frequency_hz = np.fft.rfftfreq(sample_count, d=1.0 / fs)
+    return frequency_hz, amplitude
+
+
+def modal_metrics(modes, fs):
+    frequency_hz, amplitude = single_sided_amplitude(modes, fs)
+    energy = np.sum(np.asarray(modes, dtype=float)[:, 0, :] ** 2, axis=1)
+    total = float(np.sum(energy))
+    energy_fraction = (
+        energy / total
+        if total > np.finfo(float).eps
+        else np.zeros_like(energy)
+    )
+    return {
+        "frequency_hz": frequency_hz,
+        "amplitude": amplitude,
+        "energy": energy,
+        "energy_fraction": energy_fraction,
+    }
+
+
+def add_modal_metrics(raw_result, fs):
+    result = dict(raw_result)
+    result.update(modal_metrics(raw_result["modes"], fs))
+    return result
+'''.strip()
+
+
 def build():
     notebook = v4.new_notebook(
         cells=[
@@ -198,6 +366,7 @@ def build():
                 "original-stvmd-source",
                 tags=("core", "original-algorithm-source"),
             ),
+            code(ANALYSIS_CORE, "analysis-core", tags=("core",)),
         ],
         metadata={
             "kernelspec": {
