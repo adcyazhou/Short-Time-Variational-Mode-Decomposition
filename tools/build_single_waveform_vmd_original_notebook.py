@@ -39,6 +39,7 @@ def code(source, cell_id, tags=()):
 
 
 IMPORTS = r'''
+from dataclasses import dataclass
 from pathlib import Path
 import warnings
 
