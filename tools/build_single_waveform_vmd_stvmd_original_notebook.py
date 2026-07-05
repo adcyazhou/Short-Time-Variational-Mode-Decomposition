@@ -465,6 +465,119 @@ def save_analysis(
 '''.strip()
 
 
+LOAD_AND_VALIDATE = r'''
+waveform = load_single_waveform(INPUT_FILE, DIRECTION)
+validate_config(
+    waveform,
+    K,
+    ALPHA,
+    TAU,
+    TOL,
+    MAX_ITERS,
+    VMD_N_FFT,
+    STVMD_WINDOW_LENGTH,
+    PLOT_MAX_HZ,
+)
+vmd_memory_gb = estimate_vmd_memory_gb(
+    1, waveform.values.size, K, VMD_N_FFT, MAX_ITERS
+)
+stvmd_memory_gb, stvmd_window_count = estimate_stvmd_memory_gb(
+    1,
+    waveform.values.size,
+    K,
+    STVMD_WINDOW_LENGTH,
+    MAX_ITERS,
+)
+print("Input:", waveform.path.resolve())
+print("Direction:", waveform.direction)
+print("Sampling rate:", waveform.fs, "Hz")
+print("Samples:", waveform.values.size)
+print("STVMD hop length: 1")
+print("STVMD window count:", stvmd_window_count)
+print(f"Estimated VMD memory: {vmd_memory_gb:.2f} GB")
+print(f"Estimated STVMD memory: {stvmd_memory_gb:.2f} GB")
+if max(vmd_memory_gb, stvmd_memory_gb) > 4.0:
+    warnings.warn(
+        "Estimated solver memory exceeds 4 GB; reduce K, MAX_ITERS, "
+        "or STVMD_WINDOW_LENGTH if necessary.",
+        RuntimeWarning,
+    )
+'''.strip()
+
+
+RUN_VMD = r'''
+vmd_result = run_original_vmd(
+    waveform.values.reshape(1, -1),
+    fs=waveform.fs,
+    K=K,
+    alpha=ALPHA,
+    tau=TAU,
+    tol=TOL,
+    max_iters=MAX_ITERS,
+    n_fft=VMD_N_FFT,
+)
+vmd_result = add_modal_metrics(vmd_result, waveform.fs)
+vmd_figures = plot_method_results(
+    "VMD", waveform.time_s, waveform.fs, vmd_result, PLOT_MAX_HZ
+)
+for figure in vmd_figures.values():
+    display(figure)
+'''.strip()
+
+
+RUN_STVMD = r'''
+stvmd_result = run_original_stvmd(
+    waveform.values.reshape(1, -1),
+    fs=waveform.fs,
+    K=K,
+    alpha=ALPHA,
+    tau=TAU,
+    tol=TOL,
+    max_iters=MAX_ITERS,
+    window_length=STVMD_WINDOW_LENGTH,
+)
+stvmd_result = add_modal_metrics(stvmd_result, waveform.fs)
+stvmd_figures = plot_method_results(
+    "STVMD",
+    waveform.time_s,
+    waveform.fs,
+    stvmd_result,
+    PLOT_MAX_HZ,
+)
+for figure in stvmd_figures.values():
+    display(figure)
+'''.strip()
+
+
+EXPORT = r'''
+OUTPUT_DIR = Path("output/vmd_stvmd_single_waveform")
+parameters = {
+    "K": K,
+    "ALPHA": ALPHA,
+    "TAU": TAU,
+    "TOL": TOL,
+    "MAX_ITERS": MAX_ITERS,
+    "VMD_N_FFT": VMD_N_FFT,
+    "STVMD_WINDOW_LENGTH": STVMD_WINDOW_LENGTH,
+    "HOP_LENGTH": 1,
+    "PLOT_MAX_HZ": PLOT_MAX_HZ,
+}
+if SAVE_OUTPUTS:
+    save_analysis(
+        OUTPUT_DIR,
+        waveform,
+        vmd_result,
+        stvmd_result,
+        vmd_figures,
+        stvmd_figures,
+        parameters,
+    )
+    print("Saved to:", OUTPUT_DIR.resolve())
+else:
+    print("SAVE_OUTPUTS=False: no files were written")
+'''.strip()
+
+
 def build():
     notebook = v4.new_notebook(
         cells=[
@@ -493,6 +606,23 @@ def build():
             code(ANALYSIS_CORE, "analysis-core", tags=("core",)),
             code(PLOTTING, "plotting", tags=("core",)),
             code(SAVING, "saving", tags=("core",)),
+            markdown(
+                "## Load and validate one waveform",
+                "load-heading",
+            ),
+            code(LOAD_AND_VALIDATE, "load-and-validate"),
+            markdown("## 1. Original VMD", "vmd-heading"),
+            code(RUN_VMD, "run-vmd"),
+            markdown(
+                "## 2. Original dynamic STVMD",
+                "stvmd-heading",
+            ),
+            code(RUN_STVMD, "run-stvmd"),
+            markdown(
+                "## Save requested outputs",
+                "export-heading",
+            ),
+            code(EXPORT, "export"),
         ],
         metadata={
             "kernelspec": {

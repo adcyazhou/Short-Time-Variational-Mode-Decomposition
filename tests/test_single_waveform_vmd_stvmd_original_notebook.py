@@ -304,6 +304,14 @@ def test_generator_regeneration_preserves_notebook_contract():
         ("analysis-core", ["core"]),
         ("plotting", ["core"]),
         ("saving", ["core"]),
+        ("load-heading", []),
+        ("load-and-validate", []),
+        ("vmd-heading", []),
+        ("run-vmd", []),
+        ("stvmd-heading", []),
+        ("run-stvmd", []),
+        ("export-heading", []),
+        ("export", []),
     ]
 
 
@@ -344,3 +352,53 @@ def test_notebook_contains_required_pipeline_only():
         "reconstruction error",
     ):
         assert forbidden not in source.lower()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Proactor event loop does not implement add_reader.*:RuntimeWarning"
+)
+def test_notebook_executes_vmd_then_dynamic_stvmd(tmp_path):
+    rows = [
+        (
+            np.sin(2 * np.pi * 8 * index / 128),
+            np.sin(2 * np.pi * 12 * index / 128),
+            np.sin(2 * np.pi * 20 * index / 128),
+        )
+        for index in range(64)
+    ]
+    input_path = tmp_path / "single.TXT"
+    input_path.write_text(instantel_text(rows), encoding="utf-8")
+    original_bytes = NOTEBOOK.read_bytes()
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    parameter_cells = [
+        cell
+        for cell in notebook.cells
+        if "parameters" in cell.metadata.get("tags", [])
+    ]
+    assert len(parameter_cells) == 1
+    parameter_cells[0].source = f'''
+INPUT_FILE = Path({str(input_path)!r})
+DIRECTION = "Tran"
+K = 3
+ALPHA = 50.0
+TAU = 1e-5
+TOL = 1e-4
+MAX_ITERS = 4
+VMD_N_FFT = 16
+STVMD_WINDOW_LENGTH = 16
+PLOT_MAX_HZ = 64.0
+SAVE_OUTPUTS = False
+'''.strip()
+    executed = NotebookClient(
+        notebook,
+        timeout=300,
+        kernel_name="python3",
+        resources={"metadata": {"path": str(tmp_path)}},
+    ).execute()
+    executed_source = "\n".join(
+        "".join(cell.source) for cell in executed.cells
+    )
+    assert executed_source.index("vmd_result = run_original_vmd") < (
+        executed_source.index("stvmd_result = run_original_stvmd")
+    )
+    assert NOTEBOOK.read_bytes() == original_bytes
