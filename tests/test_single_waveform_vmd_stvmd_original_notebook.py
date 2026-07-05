@@ -21,6 +21,29 @@ GENERATOR = (
 SOURCE_NOTEBOOK = ROOT / "main_STVMD.ipynb"
 
 
+def find_source_cell(notebook, markers):
+    matches = [
+        cell.source
+        for cell in notebook.cells
+        if cell.cell_type == "code"
+        and all(marker in cell.source for marker in markers)
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def notebook_namespace():
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    namespace = {}
+    for cell in notebook.cells:
+        if cell.cell_type != "code":
+            continue
+        if "core" not in cell.metadata.get("tags", []):
+            continue
+        exec(compile(cell.source, str(NOTEBOOK), "exec"), namespace)
+    return namespace
+
+
 def joined_source():
     notebook = nbformat.read(NOTEBOOK, as_version=4)
     return "\n".join(
@@ -51,6 +74,52 @@ def test_manual_parameters_have_one_source_of_truth():
         "SAVE_OUTPUTS = True",
     ):
         assert source.count(line) == 1
+
+
+def test_original_algorithm_sources_are_verbatim():
+    generated = nbformat.read(NOTEBOOK, as_version=4)
+    source = nbformat.read(SOURCE_NOTEBOOK, as_version=4)
+    generated_sources = [
+        cell.source
+        for cell in generated.cells
+        if cell.cell_type == "code"
+        and "original-algorithm-source"
+        in cell.metadata.get("tags", [])
+    ]
+    expected = [
+        find_source_cell(
+            source,
+            ("def buffer(", "def unbuffer(", "def window_norm("),
+        ),
+        find_source_cell(source, ("class VMD(object):",)),
+        find_source_cell(source, ("class STVMD(object):",)),
+    ]
+    assert generated_sources == expected
+
+
+def instantel_text(rows, fs=128, pretrigger=0.5):
+    lines = [
+        f'"Sample Rate: {fs} Hz"',
+        f'"Pre-trigger Length: {-pretrigger} seconds"',
+        '"Tran Vert Long"',
+    ]
+    lines.extend(" ".join(str(value) for value in row) for row in rows)
+    return "\n".join(lines)
+
+
+def test_fresh_loader_selects_direction_and_aligns_trigger(tmp_path):
+    path = tmp_path / "waveform.TXT"
+    path.write_text(
+        instantel_text([(1, 10, 100), (2, 20, 200)]),
+        encoding="utf-8",
+    )
+
+    waveform = notebook_namespace()["load_single_waveform"](path, "Vert")
+
+    np.testing.assert_array_equal(waveform.values, [10.0, 20.0])
+    assert waveform.fs == 128.0
+    assert waveform.time_s[0] == pytest.approx(-0.5)
+    assert waveform.direction == "Vert"
 
 
 def test_notebook_is_independent_and_orders_vmd_before_stvmd():
