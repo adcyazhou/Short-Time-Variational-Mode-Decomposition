@@ -1,5 +1,7 @@
 from pathlib import Path
 import os
+import subprocess
+import sys
 
 os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 
@@ -120,6 +122,54 @@ def test_fresh_loader_selects_direction_and_aligns_trigger(tmp_path):
     assert waveform.fs == 128.0
     assert waveform.time_s[0] == pytest.approx(-0.5)
     assert waveform.direction == "Vert"
+
+
+@pytest.mark.parametrize("fs", [0, -128, "9" * 400])
+def test_fresh_loader_rejects_invalid_sample_rate(tmp_path, fs):
+    path = tmp_path / "invalid-rate.TXT"
+    path.write_text(
+        instantel_text([(1, 10, 100)], fs=fs),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="finite positive"):
+        notebook_namespace()["load_single_waveform"](path, "Vert")
+
+
+def test_generator_regeneration_preserves_notebook_contract():
+    before = NOTEBOOK.read_bytes()
+
+    subprocess.run(
+        [sys.executable, str(GENERATOR)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert NOTEBOOK.read_bytes() == before
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    assert [
+        (cell.id, cell.metadata.get("tags", []))
+        for cell in notebook.cells
+    ] == [
+        ("title", []),
+        ("imports", ["core"]),
+        ("parameters", ["parameters"]),
+        ("loader", ["core"]),
+        (
+            "original-buffer-source",
+            ["core", "original-algorithm-source"],
+        ),
+        (
+            "original-vmd-source",
+            ["core", "original-algorithm-source"],
+        ),
+        (
+            "original-stvmd-source",
+            ["core", "original-algorithm-source"],
+        ),
+    ]
 
 
 def test_notebook_is_independent_and_orders_vmd_before_stvmd():

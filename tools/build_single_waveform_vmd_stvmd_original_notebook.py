@@ -143,6 +143,8 @@ def load_single_waveform(path, direction):
     if sample_rate_match is None:
         raise ValueError("Sample Rate metadata is missing or invalid")
     fs = float(sample_rate_match.group())
+    if not np.isfinite(fs) or fs <= 0:
+        raise ValueError("Sample Rate must be a finite positive number")
 
     pretrigger_match = re.search(
         number_pattern, metadata.get("Pre-trigger Length", "")
