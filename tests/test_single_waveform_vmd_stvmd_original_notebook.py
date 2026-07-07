@@ -22,6 +22,9 @@ GENERATOR = (
 )
 SOURCE_NOTEBOOK = ROOT / "main_STVMD.ipynb"
 
+VMD_BUGGY_DELTA = "delta = u_hat_plus[0,:,i]-u_hat_plus[1,:,i]"
+VMD_CORRECTED_DELTA = "delta = u_hat_plus[0,:,:,i]-u_hat_plus[1,:,:,i]"
+
 
 def find_source_cell(notebook, markers):
     matches = [
@@ -78,25 +81,26 @@ def test_manual_parameters_have_one_source_of_truth():
         assert source.count(line) == 1
 
 
-def test_original_algorithm_sources_are_verbatim():
+def test_algorithm_sources_preserve_only_the_audited_vmd_correction():
     generated = nbformat.read(NOTEBOOK, as_version=4)
     source = nbformat.read(SOURCE_NOTEBOOK, as_version=4)
-    generated_sources = [
-        cell.source
-        for cell in generated.cells
-        if cell.cell_type == "code"
-        and "original-algorithm-source"
-        in cell.metadata.get("tags", [])
-    ]
-    expected = [
-        find_source_cell(
-            source,
-            ("def buffer(", "def unbuffer(", "def window_norm("),
-        ),
-        find_source_cell(source, ("class VMD(object):",)),
-        find_source_cell(source, ("class STVMD(object):",)),
-    ]
-    assert generated_sources == expected
+    generated_buffer = find_source_cell(
+        generated, ("def buffer(", "def unbuffer(", "def window_norm(")
+    )
+    generated_vmd = find_source_cell(generated, ("class VMD(object):",))
+    generated_stvmd = find_source_cell(generated, ("class STVMD(object):",))
+    source_buffer = find_source_cell(
+        source, ("def buffer(", "def unbuffer(", "def window_norm(")
+    )
+    source_vmd = find_source_cell(source, ("class VMD(object):",))
+    source_stvmd = find_source_cell(source, ("class STVMD(object):",))
+    assert source_vmd.count(VMD_BUGGY_DELTA) == 1
+    expected_vmd = source_vmd.replace(
+        VMD_BUGGY_DELTA, VMD_CORRECTED_DELTA
+    )
+    assert generated_buffer == source_buffer
+    assert generated_vmd == expected_vmd
+    assert generated_stvmd == source_stvmd
 
 
 def instantel_text(rows, fs=128, pretrigger=0.5):
@@ -161,6 +165,38 @@ def test_original_adapters_return_full_length_modes():
     assert stvmd["center_frequency_hz"].shape == (3, 64)
     assert stvmd["dynamic"] is True
     assert stvmd["hop_length"] == 1
+
+
+def test_corrected_vmd_recovers_known_20_and_28_hz_components():
+    namespace = notebook_namespace()
+    fs = 128.0
+    time_s = np.arange(256) / fs
+    values = (
+        np.sin(2 * np.pi * 20 * time_s)
+        + 0.5 * np.sin(2 * np.pi * 28 * time_s)
+    ).reshape(1, -1)
+
+    result = namespace["run_original_vmd"](
+        values,
+        fs=fs,
+        K=3,
+        alpha=50.0,
+        tau=1e-5,
+        tol=1e-9,
+        max_iters=1000,
+        n_fft=64,
+    )
+    result = namespace["add_modal_metrics"](result, fs)
+
+    np.testing.assert_allclose(
+        result["center_frequency_hz"][1:],
+        [20.0, 28.0],
+        atol=1.0,
+    )
+    peaks = result["frequency_hz"][
+        np.argmax(result["amplitude"][1:], axis=1)
+    ]
+    np.testing.assert_allclose(peaks, [20.0, 28.0], atol=1.0)
 
 
 def test_single_sided_amplitude_has_physical_units():
@@ -294,8 +330,8 @@ def test_generator_regeneration_preserves_notebook_contract():
             ["core", "original-algorithm-source"],
         ),
         (
-            "original-vmd-source",
-            ["core", "original-algorithm-source"],
+            "corrected-vmd-source",
+            ["core", "corrected-algorithm-source"],
         ),
         (
             "original-stvmd-source",

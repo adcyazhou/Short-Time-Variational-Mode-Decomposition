@@ -43,6 +43,14 @@ BUFFER_SOURCE = find_code_cell(
 VMD_SOURCE = find_code_cell(SOURCE, ("class VMD(object):",))
 STVMD_SOURCE = find_code_cell(SOURCE, ("class STVMD(object):",))
 
+VMD_BUGGY_DELTA = "delta = u_hat_plus[0,:,i]-u_hat_plus[1,:,i]"
+VMD_CORRECTED_DELTA = "delta = u_hat_plus[0,:,:,i]-u_hat_plus[1,:,:,i]"
+if VMD_SOURCE.count(VMD_BUGGY_DELTA) != 1:
+    raise RuntimeError(
+        "Expected exactly one known VMD convergence-index defect"
+    )
+VMD_SOURCE = VMD_SOURCE.replace(VMD_BUGGY_DELTA, VMD_CORRECTED_DELTA)
+
 
 IMPORTS = r'''
 from dataclasses import dataclass
@@ -595,8 +603,8 @@ def build():
             ),
             code(
                 VMD_SOURCE,
-                "original-vmd-source",
-                tags=("core", "original-algorithm-source"),
+                "corrected-vmd-source",
+                tags=("core", "corrected-algorithm-source"),
             ),
             code(
                 STVMD_SOURCE,
