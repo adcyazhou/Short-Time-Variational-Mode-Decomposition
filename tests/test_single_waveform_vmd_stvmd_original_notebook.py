@@ -385,7 +385,14 @@ def test_save_analysis_writes_six_pngs_and_npz(tmp_path):
         stvmd_figures,
         parameters={"K": 3},
     )
-    assert len(list(tmp_path.glob("*.png"))) == 6
+    assert {path.name for path in tmp_path.glob("*.png")} == {
+        "vmd_time_modes.png",
+        "vmd_center_frequencies.png",
+        "vmd_energy_fraction.png",
+        "stvmd_time_modes.png",
+        "stvmd_center_frequencies.png",
+        "stvmd_energy_fraction.png",
+    }
     saved = np.load(
         tmp_path / "vmd_stvmd_single_waveform_results.npz"
     )
