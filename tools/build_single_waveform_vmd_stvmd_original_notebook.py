@@ -80,7 +80,7 @@ MAX_ITERS = 1000
 VMD_N_FFT = 64
 STVMD_WINDOW_LENGTH = 512
 
-PLOT_MAX_HZ = 200.0
+PLOT_MAX_HZ = None
 SAVE_OUTPUTS = True
 '''.strip()
 
@@ -213,10 +213,15 @@ def validate_config(
         ("ALPHA", alpha),
         ("TAU", tau),
         ("TOL", tol),
-        ("PLOT_MAX_HZ", plot_max_hz),
     ):
         if not np.isfinite(value) or value <= 0:
             raise ValueError(f"{name} must be a finite positive number")
+    if plot_max_hz is not None and (
+        not np.isfinite(plot_max_hz) or plot_max_hz <= 0
+    ):
+        raise ValueError(
+            "PLOT_MAX_HZ must be None or a finite positive number"
+        )
 
 
 def estimate_vmd_memory_gb(channels, samples, K, n_fft, max_iters):
@@ -373,23 +378,41 @@ def plot_modal_time(method, time_s, result):
     return figure
 
 
-def plot_modal_frequency(method, fs, result, plot_max_hz):
-    amplitude = result["amplitude"]
-    frequency_hz = result["frequency_hz"]
+def center_frequency_tracks(time_s, center_frequency_hz):
+    centers = np.asarray(center_frequency_hz, dtype=float)
+    if centers.ndim == 1:
+        return np.repeat(centers[:, None], len(time_s), axis=1)
+    if centers.ndim != 2 or centers.shape[1] != len(time_s):
+        raise ValueError(
+            "Center frequencies must have shape (K,) or (K, time)"
+        )
+    return centers
+
+
+def plot_center_frequencies(method, time_s, result, plot_max_hz=None):
+    tracks = center_frequency_tracks(
+        time_s, result["center_frequency_hz"]
+    )
     figure, axes = plt.subplots(
-        amplitude.shape[0],
+        tracks.shape[0],
         1,
-        figsize=(11, 2.0 * amplitude.shape[0]),
+        figsize=(11, 2.0 * tracks.shape[0]),
         sharex=True,
         constrained_layout=True,
     )
     axes = np.atleast_1d(axes)
     for index, axis in enumerate(axes):
-        axis.plot(frequency_hz, amplitude[index], lw=0.8)
-        axis.set_ylabel(f"{component_label(index)}\n(mm/s)")
-        axis.set_xlim(0.0, min(float(plot_max_hz), fs / 2.0))
-    axes[0].set_title(f"{method}: modal amplitude spectra")
-    axes[-1].set_xlabel("Frequency (Hz)")
+        axis.plot(time_s, tracks[index], lw=1.0)
+        label = (
+            "Residual (fixed 0 Hz)"
+            if index == 0
+            else f"Mode {index}"
+        )
+        axis.set_ylabel(f"{label}\nFrequency (Hz)")
+        if plot_max_hz is not None:
+            axis.set_ylim(0.0, float(plot_max_hz))
+    axes[0].set_title(f"{method}: center frequencies")
+    axes[-1].set_xlabel("Time (s)")
     return figure
 
 
@@ -416,8 +439,8 @@ def plot_energy_fraction(method, result):
 def plot_method_results(method, time_s, fs, result, plot_max_hz):
     return {
         "time_modes": plot_modal_time(method, time_s, result),
-        "frequency_modes": plot_modal_frequency(
-            method, fs, result, plot_max_hz
+        "center_frequencies": plot_center_frequencies(
+            method, time_s, result, plot_max_hz
         ),
         "energy_fraction": plot_energy_fraction(method, result),
     }

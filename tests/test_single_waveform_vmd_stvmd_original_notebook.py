@@ -75,7 +75,7 @@ def test_manual_parameters_have_one_source_of_truth():
         "MAX_ITERS = 1000",
         "VMD_N_FFT = 64",
         "STVMD_WINDOW_LENGTH = 512",
-        "PLOT_MAX_HZ = 200.0",
+        "PLOT_MAX_HZ = None",
         "SAVE_OUTPUTS = True",
     ):
         assert source.count(line) == 1
@@ -246,6 +246,99 @@ def synthetic_result(namespace):
     return time_s, fs, result
 
 
+def test_validate_config_allows_automatic_plot_limit_and_rejects_bad_limits(
+    tmp_path,
+):
+    namespace = notebook_namespace()
+    waveform = namespace["SingleWaveform"](
+        path=tmp_path / "single.TXT",
+        metadata={},
+        fs=128.0,
+        pretrigger_seconds=0.0,
+        direction="Tran",
+        time_s=np.arange(64) / 128.0,
+        values=np.ones(64),
+    )
+    namespace["validate_config"](
+        waveform,
+        K=3,
+        alpha=50.0,
+        tau=1e-5,
+        tol=1e-9,
+        max_iters=1000,
+        vmd_n_fft=64,
+        stvmd_window_length=16,
+        plot_max_hz=None,
+    )
+    with pytest.raises(
+        ValueError,
+        match="PLOT_MAX_HZ must be None or a finite positive number",
+    ):
+        namespace["validate_config"](
+            waveform,
+            K=3,
+            alpha=50.0,
+            tau=1e-5,
+            tol=1e-9,
+            max_iters=1000,
+            vmd_n_fft=64,
+            stvmd_window_length=16,
+            plot_max_hz=0.0,
+        )
+
+
+def test_vmd_center_frequency_plot_uses_horizontal_lines():
+    namespace = notebook_namespace()
+    time_s, fs, result = synthetic_result(namespace)
+    figure = namespace["plot_center_frequencies"](
+        "VMD", time_s, result, plot_max_hz=None
+    )
+    expected = result["center_frequency_hz"]
+    for axis, frequency_hz in zip(figure.axes, expected):
+        line = axis.lines[0]
+        np.testing.assert_allclose(line.get_xdata(), time_s)
+        np.testing.assert_allclose(
+            line.get_ydata(),
+            np.full(time_s.shape, frequency_hz),
+        )
+    matplotlib.pyplot.close(figure)
+
+
+def test_stvmd_center_frequency_plot_preserves_dynamic_tracks():
+    namespace = notebook_namespace()
+    time_s, fs, result = synthetic_result(namespace)
+    result["center_frequency_hz"] = np.vstack(
+        [
+            np.zeros(time_s.size),
+            np.linspace(9.0, 11.0, time_s.size),
+            np.linspace(18.0, 22.0, time_s.size),
+        ]
+    )
+    figure = namespace["plot_center_frequencies"](
+        "STVMD", time_s, result, plot_max_hz=None
+    )
+    for axis, expected in zip(figure.axes, result["center_frequency_hz"]):
+        np.testing.assert_allclose(axis.lines[0].get_ydata(), expected)
+    matplotlib.pyplot.close(figure)
+
+
+def test_automatic_center_frequency_limits_do_not_hide_high_modes():
+    namespace = notebook_namespace()
+    time_s, fs, result = synthetic_result(namespace)
+    result["center_frequency_hz"] = np.array([0.0, 50.0, 215.0, 1378.0])
+    result["modes"] = np.zeros((4, 1, time_s.size))
+    result["energy_fraction"] = np.full(4, 0.25)
+    figure = namespace["plot_center_frequencies"](
+        "VMD", time_s, result, plot_max_hz=None
+    )
+    for axis, frequency_hz in zip(
+        figure.axes, result["center_frequency_hz"]
+    ):
+        lower, upper = axis.get_ylim()
+        assert lower <= frequency_hz <= upper
+    matplotlib.pyplot.close(figure)
+
+
 def test_each_method_has_exactly_three_requested_figures():
     namespace = notebook_namespace()
     time_s, fs, result = synthetic_result(namespace)
@@ -254,11 +347,11 @@ def test_each_method_has_exactly_three_requested_figures():
     )
     assert set(figures) == {
         "time_modes",
-        "frequency_modes",
+        "center_frequencies",
         "energy_fraction",
     }
     assert len(figures["time_modes"].axes) == 3
-    assert len(figures["frequency_modes"].axes) == 3
+    assert len(figures["center_frequencies"].axes) == 3
     assert len(figures["energy_fraction"].axes) == 1
     for figure in figures.values():
         matplotlib.pyplot.close(figure)
@@ -376,7 +469,7 @@ def test_notebook_contains_required_pipeline_only():
         "def single_sided_amplitude",
         "def modal_metrics",
         "def plot_modal_time",
-        "def plot_modal_frequency",
+        "def plot_center_frequencies",
         "def plot_energy_fraction",
         "def save_analysis",
         'OUTPUT_DIR = Path("output/vmd_stvmd_single_waveform")',
@@ -422,7 +515,7 @@ TOL = 1e-4
 MAX_ITERS = 4
 VMD_N_FFT = 16
 STVMD_WINDOW_LENGTH = 16
-PLOT_MAX_HZ = 64.0
+PLOT_MAX_HZ = None
 SAVE_OUTPUTS = False
 '''.strip()
     executed = NotebookClient(
