@@ -157,3 +157,74 @@ def test_warm_start_vmd_updates_centers_and_reconstructs_two_sines():
     input_rms = np.sqrt(np.mean(signal**2))
     assert result["reconstruction_rmse"] < 0.2 * input_rms
     assert result["iterations"] <= 100
+
+
+def test_plot_vmd_modes_creates_original_plus_one_axis_per_mode():
+    ns = notebook_namespace("imports", "plotting")
+    np = ns["np"]
+    time_s = np.arange(10) / 10
+    signal = np.arange(10, dtype=float)
+    result = {
+        "modes": np.vstack([signal, -signal]),
+        "initial_centers_hz": np.array([10.0, 20.0]),
+        "final_centers_hz": np.array([11.0, 19.0]),
+    }
+    figure = ns["plot_vmd_modes"](
+        "5m", "Tran", time_s, signal, result, alpha=2000.0
+    )
+    assert len(figure.axes) == 3
+    labels = [axis.get_ylabel() for axis in figure.axes]
+    assert labels == [
+        "Original\n(mm/s)",
+        "Mode 1\n(mm/s)",
+        "Mode 2\n(mm/s)",
+    ]
+    assert (
+        "init=10.00 Hz, final=11.00 Hz"
+        in figure.axes[1].get_title()
+    )
+    assert "alpha=2000" in figure._suptitle.get_text()
+    ns["plt"].close(figure)
+
+
+def test_analyze_all_records_runs_every_distance_direction_pair():
+    ns = notebook_namespace(
+        "imports", "loader", "validation", "analysis"
+    )
+    np = ns["np"]
+    calls = []
+
+    def fake_run(signal, **kwargs):
+        calls.append(kwargs["data_key"])
+        return {"modes": np.zeros((kwargs["K"], len(signal)))}
+
+    ns["run_warm_start_vmd"] = fake_run
+    record = ns["BlastRecord"](
+        path=Path("x"),
+        fs=128.0,
+        pretrigger_seconds=0.5,
+        unit="mm/s",
+        channels={
+            name: np.ones(16) for name in ("Tran", "Vert", "Long")
+        },
+        time_s=np.arange(16) / 128 - 0.5,
+    )
+    records = {
+        distance: record for distance in ("5m", "10m", "15m")
+    }
+    config = {
+        distance: {
+            direction: {"K": 1, "centers_hz": [10.0]}
+            for direction in ("Tran", "Vert", "Long")
+        }
+        for distance in records
+    }
+    results = ns["analyze_all_records"](
+        records, config, 2000.0, 64, 1e-5, 1e-9, 20
+    )
+    assert len(results) == 9
+    assert calls == [
+        (distance, direction)
+        for distance in ("5m", "10m", "15m")
+        for direction in ("Tran", "Vert", "Long")
+    ]

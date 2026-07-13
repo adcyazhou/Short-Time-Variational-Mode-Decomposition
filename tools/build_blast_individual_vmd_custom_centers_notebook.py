@@ -360,6 +360,121 @@ def run_warm_start_vmd(
         "iterations": iterations,
         "converged": converged,
     }
+
+
+def analyze_all_records(
+    records, config, alpha, n_fft, tau, tol, max_iters
+):
+    results = {}
+    for distance in ("5m", "10m", "15m"):
+        record = records[distance]
+        for direction in ("Tran", "Vert", "Long"):
+            item = config[distance][direction]
+            result = run_warm_start_vmd(
+                record.channels[direction],
+                fs=record.fs,
+                K=item["K"],
+                centers_hz=item["centers_hz"],
+                alpha=alpha,
+                n_fft=n_fft,
+                tau=tau,
+                tol=tol,
+                max_iters=max_iters,
+                data_key=(distance, direction),
+            )
+            results[(distance, direction)] = result
+    return results
+
+
+def print_vmd_summary(distance, direction, record, result):
+    print(
+        f"{distance}/{direction}: samples={record.time_s.size}, "
+        f"fs={record.fs:g} Hz"
+    )
+    print(
+        "  initial centers (Hz):",
+        np.array2string(result["initial_centers_hz"], precision=3),
+    )
+    print(
+        "  final centers (Hz):  ",
+        np.array2string(result["final_centers_hz"], precision=3),
+    )
+    print(
+        f"  iterations={result['iterations']}, "
+        f"converged={result['converged']}"
+    )
+    print(
+        f"  reconstruction RMSE="
+        f"{result['reconstruction_rmse']:.6g}"
+    )
+'''.strip()
+
+PLOTTING = r'''
+def plot_vmd_modes(
+    distance,
+    direction,
+    time_s,
+    signal,
+    result,
+    alpha=2000.0,
+):
+    modes = result["modes"]
+    figure, axes = plt.subplots(
+        modes.shape[0] + 1,
+        1,
+        figsize=(12, 2.0 * (modes.shape[0] + 1)),
+        sharex=True,
+        constrained_layout=True,
+        dpi=120,
+    )
+    axes[0].plot(time_s, signal, color="#202020", linewidth=0.8)
+    axes[0].set_ylabel("Original\n(mm/s)")
+    axes[0].grid(alpha=0.2)
+    for index, mode in enumerate(modes):
+        axis = axes[index + 1]
+        axis.plot(time_s, mode, color="#0072B2", linewidth=0.75)
+        axis.set_ylabel(f"Mode {index + 1}\n(mm/s)")
+        axis.set_title(
+            f"init={result['initial_centers_hz'][index]:.2f} Hz, "
+            f"final={result['final_centers_hz'][index]:.2f} Hz",
+            fontsize=9,
+        )
+        axis.grid(alpha=0.2)
+    axes[-1].set_xlabel("Relative time (s)")
+    figure.suptitle(
+        f"{distance} {direction}: K={modes.shape[0]}, "
+        f"alpha={alpha:g}"
+    )
+    return figure
+'''.strip()
+
+LOAD_RECORDS = r'''
+records = {
+    distance: load_instantel_record(path)
+    for distance, path in INPUT_FILES.items()
+}
+'''.strip()
+
+RUN_ALL = r'''
+results = analyze_all_records(
+    records, VMD_CONFIG, ALPHA, N_FFT, TAU, TOL, MAX_ITERS
+)
+figures = {}
+for distance in ("5m", "10m", "15m"):
+    for direction in ("Tran", "Vert", "Long"):
+        key = (distance, direction)
+        print_vmd_summary(
+            distance, direction, records[distance], results[key]
+        )
+        figures[key] = plot_vmd_modes(
+            distance,
+            direction,
+            records[distance].time_s,
+            records[distance].channels[direction],
+            results[key],
+            alpha=ALPHA,
+        )
+        display(figures[key])
 '''.strip()
 
 PLACEHOLDER = "pass"
@@ -375,9 +490,9 @@ def build():
             code(VALIDATION, "validation"),
             code(WARM_START_VMD, "warm-start-vmd"),
             code(ANALYSIS, "analysis"),
-            code(PLACEHOLDER, "plotting"),
-            code(PLACEHOLDER, "load-records"),
-            code(PLACEHOLDER, "run-all"),
+            code(PLOTTING, "plotting"),
+            code(LOAD_RECORDS, "load-records"),
+            code(RUN_ALL, "run-all"),
         ],
         metadata={
             "kernelspec": {
