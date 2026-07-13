@@ -228,3 +228,57 @@ def test_analyze_all_records_runs_every_distance_direction_pair():
         for distance in ("5m", "10m", "15m")
         for direction in ("Tran", "Vert", "Long")
     ]
+
+
+def test_regeneration_is_stable():
+    subprocess.run([sys.executable, str(BUILDER)], cwd=ROOT, check=True)
+    first = NOTEBOOK.read_bytes()
+    subprocess.run([sys.executable, str(BUILDER)], cwd=ROOT, check=True)
+    assert NOTEBOOK.read_bytes() == first
+
+
+def test_quick_test_truncates_every_record_to_512_samples(monkeypatch):
+    monkeypatch.setenv("BLAST_VMD_QUICK_TEST", "1")
+    ns = notebook_namespace("imports", "config", "loader", "load-records")
+    assert set(ns["records"]) == {"5m", "10m", "15m"}
+    for record in ns["records"].values():
+        assert record.time_s.size == 512
+        assert all(
+            channel.size == 512 for channel in record.channels.values()
+        )
+
+
+def test_notebook_executes_quick_path(tmp_path):
+    env = dict(os.environ)
+    env["BLAST_VMD_QUICK_TEST"] = "1"
+    command = [
+        sys.executable,
+        "-m",
+        "jupyter",
+        "nbconvert",
+        "--to",
+        "notebook",
+        "--execute",
+        NOTEBOOK.name,
+        "--output",
+        "executed.ipynb",
+        "--output-dir",
+        str(tmp_path),
+        "--ExecutePreprocessor.timeout=600",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert completed.returncode == 0, completed.stdout
+    executed = nbformat.read(tmp_path / "executed.ipynb", as_version=4)
+    run_cell = next(cell for cell in executed.cells if cell.id == "run-all")
+    image_count = sum(
+        "image/png" in output.get("data", {})
+        for output in run_cell.get("outputs", [])
+    )
+    assert image_count == 9

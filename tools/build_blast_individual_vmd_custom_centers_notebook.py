@@ -453,6 +453,21 @@ records = {
     distance: load_instantel_record(path)
     for distance, path in INPUT_FILES.items()
 }
+if QUICK_TEST:
+    records = {
+        key: BlastRecord(
+            path=value.path,
+            fs=value.fs,
+            pretrigger_seconds=value.pretrigger_seconds,
+            unit=value.unit,
+            channels={
+                name: channel[:512]
+                for name, channel in value.channels.items()
+            },
+            time_s=value.time_s[:512],
+        )
+        for key, value in records.items()
+    }
 '''.strip()
 
 RUN_ALL = r'''
@@ -475,6 +490,7 @@ for distance in ("5m", "10m", "15m"):
             alpha=ALPHA,
         )
         display(figures[key])
+        plt.close(figures[key])
 '''.strip()
 
 PLACEHOLDER = "pass"
