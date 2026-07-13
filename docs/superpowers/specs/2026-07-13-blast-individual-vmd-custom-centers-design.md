@@ -96,12 +96,22 @@ MAX_ITERS = 10000
 `VMD`：反射填充、单边实 FFT、ADMM 模态更新、拉格朗日乘子更新、能量重心
 中心更新、收敛判断和逆 FFT 后处理均保持一致。
 
+源实现虽然按奇偶索引只访问当前与下一迭代状态，却按 `MAX_ITERS` 分配完整
+历史数组。新 Notebook 将 `u_hat_plus`、`lambda_hat` 和 `omega_plus` 改为两个
+循环缓冲区，并用明确的 `current_index`、`next_index` 计算收敛差异和返回最终
+状态。该调整不改变更新方程或停止准则，但避免完整爆破记录因迭代历史数组
+耗尽内存，并确保返回的是最后一次已完成迭代。
+
 为实现热启动，需要对原类的中心更新语义做一个明确调整。用户输入的 Hz
 中心转换为源实现使用的归一化频率：
 
 ```python
-omega_init = np.asarray(centers_hz, dtype=float) / fs
+omega_init = np.asarray(centers_hz, dtype=float) / (fs / 2.0)
 ```
+
+这是由源 VMD 的内部频率轴决定的：内部值 1.0 对应奈奎斯特频率
+`fs / 2`。最终中心换回 Hz 时使用相反变换
+`center_hz = omega * (fs / 2.0)`。
 
 它只赋给：
 
