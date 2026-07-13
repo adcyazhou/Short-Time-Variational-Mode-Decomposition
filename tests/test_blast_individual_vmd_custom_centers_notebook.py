@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import nbformat
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,3 +85,75 @@ def test_load_instantel_record_preserves_all_three_channels(tmp_path):
     np.testing.assert_allclose(
         record.time_s, [-0.5, -0.5 + 1 / 256]
     )
+
+
+@pytest.mark.parametrize(
+    "config, message",
+    [
+        ({"K": 3, "centers_hz": [10, 20]}, "K=3"),
+        (
+            {"K": 3, "centers_hz": [10, 10, 20]},
+            "strictly increasing",
+        ),
+        (
+            {"K": 3, "centers_hz": [20, 10, 30]},
+            "strictly increasing",
+        ),
+        ({"K": 2, "centers_hz": [10, 64]}, "Nyquist"),
+    ],
+)
+def test_validate_signal_config_rejects_invalid_centers(config, message):
+    ns = notebook_namespace("imports", "validation")
+    with pytest.raises(ValueError, match=message):
+        ns["validate_signal_config"]("5m", "Tran", config, fs=128)
+
+
+def test_validate_signal_config_does_not_insert_zero_center():
+    ns = notebook_namespace("imports", "validation")
+    centers = ns["validate_signal_config"](
+        "5m",
+        "Tran",
+        {"K": 2, "centers_hz": [10, 20]},
+        fs=128,
+    )
+    ns["np"].testing.assert_allclose(centers, [10, 20])
+
+
+def test_hz_normalization_maps_nyquist_to_one():
+    ns = notebook_namespace("imports", "validation", "warm-start-vmd")
+    ns["np"].testing.assert_allclose(
+        ns["centers_hz_to_internal"]([0, 32], 128), [0, 0.5]
+    )
+    ns["np"].testing.assert_allclose(
+        ns["centers_internal_to_hz"]([0, 0.5], 128), [0, 32]
+    )
+
+
+def test_warm_start_vmd_updates_centers_and_reconstructs_two_sines():
+    ns = notebook_namespace(
+        "imports", "validation", "warm-start-vmd", "analysis"
+    )
+    np = ns["np"]
+    fs = 128.0
+    time_s = np.arange(512) / fs
+    signal = np.sin(2 * np.pi * 20 * time_s) + 0.6 * np.sin(
+        2 * np.pi * 28 * time_s
+    )
+    result = ns["run_warm_start_vmd"](
+        signal,
+        fs=fs,
+        K=2,
+        centers_hz=[17.0, 32.0],
+        alpha=2000.0,
+        n_fft=64,
+        tau=1e-5,
+        tol=1e-7,
+        max_iters=100,
+        data_key=("synthetic", "x"),
+    )
+    assert result["modes"].shape == (2, signal.size)
+    assert np.isfinite(result["modes"]).all()
+    assert not np.allclose(result["final_centers_hz"], [17.0, 32.0])
+    input_rms = np.sqrt(np.mean(signal**2))
+    assert result["reconstruction_rmse"] < 0.2 * input_rms
+    assert result["iterations"] <= 100

@@ -130,6 +130,238 @@ def load_instantel_record(path):
     )
 '''.strip()
 
+VALIDATION = r'''
+def validate_signal_config(distance, direction, config, fs):
+    key = f"{distance}/{direction}"
+    K = config.get("K")
+    if not isinstance(K, (int, np.integer)) or K < 1:
+        raise ValueError(f"{key}: K must be a positive integer")
+    centers = np.asarray(config.get("centers_hz"), dtype=float)
+    if centers.ndim != 1 or centers.size != K:
+        raise ValueError(
+            f"{key}: K={K} but centers_hz has {centers.size} values"
+        )
+    if not np.isfinite(centers).all():
+        raise ValueError(f"{key}: centers_hz must be finite")
+    if np.any(np.diff(centers) <= 0):
+        raise ValueError(f"{key}: centers_hz must be strictly increasing")
+    if np.any(centers < 0) or np.any(centers >= fs / 2.0):
+        raise ValueError(
+            f"{key}: centers_hz must lie below the Nyquist frequency"
+        )
+    return centers
+
+
+def validate_global_config(alpha, n_fft, tau, tol, max_iters):
+    if alpha != 2000.0:
+        raise ValueError("ALPHA is fixed at 2000.0")
+    if not isinstance(n_fft, (int, np.integer)) or n_fft < 2:
+        raise ValueError("N_FFT must be an integer >= 2")
+    if not np.isfinite(tau) or tau < 0:
+        raise ValueError("TAU must be finite and nonnegative")
+    if not np.isfinite(tol) or tol <= 0:
+        raise ValueError("TOL must be finite and positive")
+    if (
+        not isinstance(max_iters, (int, np.integer))
+        or max_iters < 2
+    ):
+        raise ValueError("MAX_ITERS must be an integer >= 2")
+'''.strip()
+
+WARM_START_VMD = r'''
+def centers_hz_to_internal(centers_hz, fs):
+    return np.asarray(centers_hz, dtype=float) / (fs / 2.0)
+
+
+def centers_internal_to_hz(centers, fs):
+    return np.asarray(centers, dtype=float) * (fs / 2.0)
+
+
+class WarmStartVMD:
+    """Source VMD equations with updateable user-supplied initial centers."""
+
+    def __init__(
+        self,
+        num_channel,
+        n_fft=64,
+        alpha=2000.0,
+        K=3,
+        tol=1e-9,
+        tau=1e-5,
+        maxiters=10000,
+    ):
+        self.num_channel = num_channel
+        self.n_fft = n_fft
+        self.alpha = alpha * np.ones(K)
+        self.K = K
+        self.tol = tol
+        self.tau = tau
+        self.maxiters = maxiters
+        self.padwidth = (
+            ((n_fft - 1) // 2, (n_fft - 1) // 2)
+            if (n_fft - 1) % 2 == 0
+            else ((n_fft - 1) // 2 + 1, (n_fft - 1) // 2)
+        )
+
+    def prepare_offline(self, x):
+        x = np.asarray(x, dtype=float)
+        if x.ndim == 1:
+            x = x.reshape(1, -1)
+        if x.ndim != 2 or x.shape[0] != self.num_channel:
+            raise ValueError(
+                "x must have shape (num_channel, samples)"
+            )
+        self.len_x = x.shape[1]
+        padded = np.pad(x, ((0, 0), self.padwidth), mode="reflect")
+        return rfft(padded, axis=1, workers=-1)
+
+    def apply(self, f_hat_plus, omega_init):
+        channels, frequency_bins = f_hat_plus.shape
+        freqs = (
+            np.arange(1, frequency_bins + 1, dtype=float)
+            / frequency_bins
+        )
+        omega_init = np.asarray(omega_init, dtype=float)
+        if omega_init.shape != (self.K,):
+            raise ValueError(f"omega_init must contain {self.K} values")
+
+        omega_state = np.zeros((2, self.K), dtype=float)
+        omega_state[0] = omega_init
+        u_state = np.zeros(
+            (2, channels, frequency_bins, self.K), dtype=complex
+        )
+        lambda_state = np.zeros(
+            (2, channels, frequency_bins), dtype=complex
+        )
+        sum_uk = np.zeros((channels, frequency_bins), dtype=complex)
+        converged = False
+
+        for iteration in range(self.maxiters - 1):
+            current = iteration % 2
+            next_index = (iteration + 1) % 2
+            for k in range(self.K):
+                previous_k = self.K - 1 if k == 0 else k - 1
+                previous_state = current if k == 0 else next_index
+                sum_uk = (
+                    u_state[previous_state, :, :, previous_k]
+                    + sum_uk
+                    - u_state[current, :, :, k]
+                )
+                denominator = 1.0 + self.alpha[k] * (
+                    freqs - omega_state[current, k]
+                ) ** 2
+                u_state[next_index, :, :, k] = (
+                    f_hat_plus
+                    - sum_uk
+                    - lambda_state[current] / 2.0
+                ) / denominator
+
+                power = np.abs(u_state[next_index, :, :, k]) ** 2
+                total_power = float(np.sum(power))
+                if (
+                    not np.isfinite(total_power)
+                    or total_power <= np.finfo(float).eps
+                ):
+                    raise FloatingPointError(
+                        f"mode {k + 1} has zero or invalid energy"
+                    )
+                omega_state[next_index, k] = np.sum(
+                    freqs * np.sum(power, axis=0)
+                ) / total_power
+
+            lambda_state[next_index] = lambda_state[current] + self.tau * (
+                np.sum(u_state[next_index], axis=2) - f_hat_plus
+            )
+            delta = u_state[next_index] - u_state[current]
+            u_diff = float(np.mean(np.abs(delta) ** 2))
+            if u_diff < self.tol and iteration > 2:
+                converged = True
+                break
+
+        final_index = (iteration + 1) % 2
+        order = np.argsort(omega_state[final_index])
+        return (
+            u_state[final_index][:, :, order],
+            omega_state[final_index, order],
+            iteration + 1,
+            converged,
+            order,
+        )
+
+    def postprocess(self, u_hat):
+        padded_n = self.len_x + sum(self.padwidth)
+        u = irfft(
+            u_hat, n=padded_n, axis=1, workers=-1
+        ).real
+        u = np.transpose(u, (2, 0, 1))
+        return u[
+            :,
+            :,
+            self.padwidth[0] : padded_n - self.padwidth[1],
+        ]
+'''.strip()
+
+ANALYSIS = r'''
+def run_warm_start_vmd(
+    signal,
+    fs,
+    K,
+    centers_hz,
+    alpha,
+    n_fft,
+    tau,
+    tol,
+    max_iters,
+    data_key,
+):
+    distance, direction = data_key
+    signal = np.asarray(signal, dtype=float)
+    if (
+        signal.ndim != 1
+        or signal.size < 2
+        or not np.isfinite(signal).all()
+    ):
+        raise ValueError(
+            f"{distance}/{direction}: signal must be finite and one-dimensional"
+        )
+    if not np.isfinite(fs) or fs <= 0:
+        raise ValueError(f"{distance}/{direction}: fs must be positive")
+    validate_global_config(alpha, n_fft, tau, tol, max_iters)
+    centers = validate_signal_config(
+        distance,
+        direction,
+        {"K": K, "centers_hz": centers_hz},
+        fs,
+    )
+    model = WarmStartVMD(
+        1,
+        n_fft=n_fft,
+        alpha=alpha,
+        K=K,
+        tol=tol,
+        tau=tau,
+        maxiters=max_iters,
+    )
+    spectrum = model.prepare_offline(signal.reshape(1, -1))
+    mode_spectrum, omega, iterations, converged, order = model.apply(
+        spectrum, centers_hz_to_internal(centers, fs)
+    )
+    modes = model.postprocess(mode_spectrum)[:, 0, :]
+    reconstruction = np.sum(modes, axis=0)
+    return {
+        "modes": modes,
+        "mode_spectrum": mode_spectrum,
+        "initial_centers_hz": centers[order],
+        "final_centers_hz": centers_internal_to_hz(omega, fs),
+        "reconstruction": reconstruction,
+        "reconstruction_rmse": float(
+            np.sqrt(np.mean((signal - reconstruction) ** 2))
+        ),
+        "iterations": iterations,
+        "converged": converged,
+    }
+'''.strip()
+
 PLACEHOLDER = "pass"
 
 
@@ -140,9 +372,9 @@ def build():
             code(IMPORTS, "imports"),
             code(CONFIG, "config"),
             code(LOADER, "loader"),
-            code(PLACEHOLDER, "validation"),
-            code(PLACEHOLDER, "warm-start-vmd"),
-            code(PLACEHOLDER, "analysis"),
+            code(VALIDATION, "validation"),
+            code(WARM_START_VMD, "warm-start-vmd"),
+            code(ANALYSIS, "analysis"),
             code(PLACEHOLDER, "plotting"),
             code(PLACEHOLDER, "load-records"),
             code(PLACEHOLDER, "run-all"),
