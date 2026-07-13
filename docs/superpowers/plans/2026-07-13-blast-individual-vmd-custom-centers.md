@@ -226,7 +226,7 @@ INPUT_FILES = {
 # centers_hz contains all K initial centers; 0 Hz is never added automatically.
 VMD_CONFIG = {
     distance: {
-        direction: {"K": 3, "centers_hz": [10.0, 40.0, 100.0]}
+        direction: {"K": None, "centers_hz": []}
         for direction in ("Tran", "Vert", "Long")
     }
     for distance in ("5m", "10m", "15m")
@@ -242,6 +242,13 @@ PLOT_DPI = 120
 QUICK_TEST = os.environ.get("BLAST_VMD_QUICK_TEST") == "1"
 if QUICK_TEST:
     MAX_ITERS = 20
+    VMD_CONFIG = {
+        distance: {
+            direction: {"K": 3, "centers_hz": [10.0, 40.0, 100.0]}
+            for direction in ("Tran", "Vert", "Long")
+        }
+        for distance in ("5m", "10m", "15m")
+    }
 '''.strip()
 ```
 
@@ -845,7 +852,7 @@ Expected: all new tests pass; the existing repository suite reports zero failure
 
 - [ ] **Step 6: Execute a full-data smoke run with practical convergence observation**
 
-Open the Notebook, replace the nine example center lists with the user's intended values, then execute all cells. Confirm for each of the nine analyses:
+Open the Notebook, fill all nine blank K and center lists with the user's intended values, then execute all cells. Confirm for each of the nine analyses:
 
 - one original-plus-K-modes figure is produced;
 - final centers are finite and below Nyquist;

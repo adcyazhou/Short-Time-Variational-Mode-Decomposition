@@ -68,7 +68,16 @@ def test_config_contains_independent_entries_for_all_nine_signals():
             "Long",
         }
         for config in ns["VMD_CONFIG"][distance].values():
-            assert config["K"] == len(config["centers_hz"])
+            assert config == {"K": None, "centers_hz": []}
+
+
+def test_normal_config_cannot_run_before_user_fills_parameters():
+    ns = notebook_namespace("imports", "config", "validation")
+    config = ns["VMD_CONFIG"]["5m"]["Tran"]
+    with pytest.raises(ValueError, match="K must be a positive integer"):
+        ns["validate_signal_config"](
+            "5m", "Tran", config, fs=4096.0
+        )
 
 
 def test_load_instantel_record_preserves_all_three_channels(tmp_path):

@@ -41,11 +41,12 @@ INPUT_FILES = {
     "15m": Path("15m.TXT"),
 }
 
-# 在这里分别修改九条信号的 K 和全部 K 个初始中心频率。
+# 在这里由用户分别填写九条信号的 K 和全部 K 个初始中心频率。
+# 未填写时 Notebook 会明确报错，不会自行选择参数或开始正式分析。
 # 程序不会自动添加 0 Hz 模态；如需要，请在 centers_hz 中明确填写 0.0。
 VMD_CONFIG = {
     distance: {
-        direction: {"K": 3, "centers_hz": [10.0, 40.0, 100.0]}
+        direction: {"K": None, "centers_hz": []}
         for direction in ("Tran", "Vert", "Long")
     }
     for distance in ("5m", "10m", "15m")
@@ -61,6 +62,13 @@ PLOT_DPI = 120
 QUICK_TEST = os.environ.get("BLAST_VMD_QUICK_TEST") == "1"
 if QUICK_TEST:
     MAX_ITERS = 20
+    VMD_CONFIG = {
+        distance: {
+            direction: {"K": 3, "centers_hz": [10.0, 40.0, 100.0]}
+            for direction in ("Tran", "Vert", "Long")
+        }
+        for distance in ("5m", "10m", "15m")
+    }
 '''.strip()
 
 LOADER = r'''
