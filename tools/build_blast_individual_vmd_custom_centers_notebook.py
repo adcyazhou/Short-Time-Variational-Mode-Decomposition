@@ -31,7 +31,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import display
-from scipy.fft import irfft, rfft
+from scipy.fft import irfft, rfft, rfftfreq
 """
 
 CONFIG = r'''
@@ -123,6 +123,9 @@ def load_instantel_record(path):
     if not np.isfinite(fs) or fs <= 0:
         raise ValueError(f"{path.name}: sample rate must be positive")
     pretrigger = abs(_metadata_number(metadata, "Pre-trigger Length"))
+    if "Units" not in metadata or not metadata["Units"].split():
+        raise ValueError(f"{path.name}: missing Units metadata")
+    unit = metadata["Units"].split()[0]
     time_s = np.arange(data.shape[0], dtype=float) / fs - pretrigger
     channels = {
         name: data[:, index].copy()
@@ -132,7 +135,7 @@ def load_instantel_record(path):
         path=path,
         fs=fs,
         pretrigger_seconds=pretrigger,
-        unit="mm/s",
+        unit=unit,
         channels=channels,
         time_s=time_s,
     )
@@ -185,6 +188,10 @@ def centers_internal_to_hz(centers, fs):
     return np.asarray(centers, dtype=float) * (fs / 2.0)
 
 
+def normalized_rfft_grid(sample_count):
+    return 2.0 * rfftfreq(sample_count, d=1.0)
+
+
 class WarmStartVMD:
     """Source VMD equations with updateable user-supplied initial centers."""
 
@@ -221,14 +228,14 @@ class WarmStartVMD:
             )
         self.len_x = x.shape[1]
         padded = np.pad(x, ((0, 0), self.padwidth), mode="reflect")
+        self.padded_n = padded.shape[1]
         return rfft(padded, axis=1, workers=-1)
 
     def apply(self, f_hat_plus, omega_init):
         channels, frequency_bins = f_hat_plus.shape
-        freqs = (
-            np.arange(1, frequency_bins + 1, dtype=float)
-            / frequency_bins
-        )
+        freqs = normalized_rfft_grid(self.padded_n)
+        if freqs.size != frequency_bins:
+            raise RuntimeError("rFFT grid and spectrum length disagree")
         omega_init = np.asarray(omega_init, dtype=float)
         if omega_init.shape != (self.K,):
             raise ValueError(f"omega_init must contain {self.K} values")
@@ -351,9 +358,14 @@ def run_warm_start_vmd(
         maxiters=max_iters,
     )
     spectrum = model.prepare_offline(signal.reshape(1, -1))
-    mode_spectrum, omega, iterations, converged, order = model.apply(
-        spectrum, centers_hz_to_internal(centers, fs)
-    )
+    try:
+        mode_spectrum, omega, iterations, converged, order = model.apply(
+            spectrum, centers_hz_to_internal(centers, fs)
+        )
+    except FloatingPointError as exc:
+        raise FloatingPointError(
+            f"{distance}/{direction}: {exc}"
+        ) from exc
     modes = model.postprocess(mode_spectrum)[:, 0, :]
     reconstruction = np.sum(modes, axis=0)
     return {
@@ -424,6 +436,7 @@ def plot_vmd_modes(
     time_s,
     signal,
     result,
+    unit,
     alpha=2000.0,
 ):
     modes = result["modes"]
@@ -436,13 +449,14 @@ def plot_vmd_modes(
         dpi=120,
     )
     axes[0].plot(time_s, signal, color="#202020", linewidth=0.8)
-    axes[0].set_ylabel("Original\n(mm/s)")
+    axes[0].set_ylabel(f"Original\n({unit})")
     axes[0].grid(alpha=0.2)
     for index, mode in enumerate(modes):
         axis = axes[index + 1]
         axis.plot(time_s, mode, color="#0072B2", linewidth=0.75)
-        axis.set_ylabel(f"Mode {index + 1}\n(mm/s)")
+        axis.set_ylabel(f"Mode {index + 1}\n({unit})")
         axis.set_title(
+            f"Mode {index + 1}: "
             f"init={result['initial_centers_hz'][index]:.2f} Hz, "
             f"final={result['final_centers_hz'][index]:.2f} Hz",
             fontsize=9,
@@ -495,6 +509,7 @@ for distance in ("5m", "10m", "15m"):
             records[distance].time_s,
             records[distance].channels[direction],
             results[key],
+            unit=records[distance].unit,
             alpha=ALPHA,
         )
         display(figures[key])

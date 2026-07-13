@@ -23,12 +23,14 @@ def notebook_namespace(*cell_ids):
     return namespace
 
 
-def write_instantel(path, fs=128, rows=((1, 2, 3), (4, 5, 6))):
+def write_instantel(
+    path, fs=128, unit="mm/s", rows=((1, 2, 3), (4, 5, 6))
+):
     body = "\n".join(" ".join(map(str, row)) for row in rows)
     path.write_text(
         f'"Sample Rate : {fs} sps"\n'
         '"Pre-trigger Length : -0.500 sec"\n'
-        '"Units : mm/s and "\n'
+        f'"Units : {unit} and "\n'
         "Tran Vert Long\n"
         f"{body}\n",
         encoding="utf-8",
@@ -87,6 +89,7 @@ def test_load_instantel_record_preserves_all_three_channels(tmp_path):
     record = ns["load_instantel_record"](path)
     assert record.fs == 256
     assert record.pretrigger_seconds == 0.5
+    assert record.unit == "mm/s"
     np = ns["np"]
     np.testing.assert_allclose(record.channels["Tran"], [1, 4])
     np.testing.assert_allclose(record.channels["Vert"], [2, 5])
@@ -94,6 +97,13 @@ def test_load_instantel_record_preserves_all_three_channels(tmp_path):
     np.testing.assert_allclose(
         record.time_s, [-0.5, -0.5 + 1 / 256]
     )
+
+
+def test_load_instantel_record_reads_unit_from_header(tmp_path):
+    path = tmp_path / "record.TXT"
+    write_instantel(path, unit="in/s")
+    ns = notebook_namespace("imports", "loader")
+    assert ns["load_instantel_record"](path).unit == "in/s"
 
 
 @pytest.mark.parametrize(
@@ -128,13 +138,20 @@ def test_validate_signal_config_does_not_insert_zero_center():
     ns["np"].testing.assert_allclose(centers, [10, 20])
 
 
-def test_hz_normalization_maps_nyquist_to_one():
+def test_hz_normalization_maps_half_nyquist_to_half():
     ns = notebook_namespace("imports", "validation", "warm-start-vmd")
     ns["np"].testing.assert_allclose(
         ns["centers_hz_to_internal"]([0, 32], 128), [0, 0.5]
     )
     ns["np"].testing.assert_allclose(
         ns["centers_internal_to_hz"]([0, 0.5], 128), [0, 32]
+    )
+
+
+def test_normalized_rfft_grid_includes_dc_and_matches_even_fft_bins():
+    ns = notebook_namespace("imports", "warm-start-vmd")
+    ns["np"].testing.assert_allclose(
+        ns["normalized_rfft_grid"](8), [0.0, 0.25, 0.5, 0.75, 1.0]
     )
 
 
@@ -163,9 +180,33 @@ def test_warm_start_vmd_updates_centers_and_reconstructs_two_sines():
     assert result["modes"].shape == (2, signal.size)
     assert np.isfinite(result["modes"]).all()
     assert not np.allclose(result["final_centers_hz"], [17.0, 32.0])
+    np.testing.assert_allclose(
+        result["final_centers_hz"], [20.0, 28.0], atol=0.5
+    )
     input_rms = np.sqrt(np.mean(signal**2))
     assert result["reconstruction_rmse"] < 0.2 * input_rms
     assert result["iterations"] <= 100
+
+
+def test_zero_energy_error_identifies_distance_direction_and_mode():
+    ns = notebook_namespace(
+        "imports", "validation", "warm-start-vmd", "analysis"
+    )
+    with pytest.raises(
+        FloatingPointError, match=r"5m/Tran: mode 1"
+    ):
+        ns["run_warm_start_vmd"](
+            ns["np"].zeros(64),
+            fs=128.0,
+            K=1,
+            centers_hz=[10.0],
+            alpha=2000.0,
+            n_fft=64,
+            tau=1e-5,
+            tol=1e-7,
+            max_iters=20,
+            data_key=("5m", "Tran"),
+        )
 
 
 def test_plot_vmd_modes_creates_original_plus_one_axis_per_mode():
@@ -179,17 +220,18 @@ def test_plot_vmd_modes_creates_original_plus_one_axis_per_mode():
         "final_centers_hz": np.array([11.0, 19.0]),
     }
     figure = ns["plot_vmd_modes"](
-        "5m", "Tran", time_s, signal, result, alpha=2000.0
+        "5m", "Tran", time_s, signal, result,
+        unit="cm/s", alpha=2000.0
     )
     assert len(figure.axes) == 3
     labels = [axis.get_ylabel() for axis in figure.axes]
     assert labels == [
-        "Original\n(mm/s)",
-        "Mode 1\n(mm/s)",
-        "Mode 2\n(mm/s)",
+        "Original\n(cm/s)",
+        "Mode 1\n(cm/s)",
+        "Mode 2\n(cm/s)",
     ]
     assert (
-        "init=10.00 Hz, final=11.00 Hz"
+        "Mode 1: init=10.00 Hz, final=11.00 Hz"
         in figure.axes[1].get_title()
     )
     assert "alpha=2000" in figure._suptitle.get_text()
