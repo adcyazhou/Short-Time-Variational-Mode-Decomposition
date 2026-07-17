@@ -448,7 +448,25 @@ def test_generator_regeneration_preserves_notebook_contract():
         ("run-stvmd", []),
         ("export-heading", []),
         ("export", []),
+        ("synthetic-stvmd-heading", []),
+        ("synthetic-stvmd-two-sines", []),
     ]
+
+
+def test_synthetic_two_sine_stvmd_example_is_appended():
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    assert notebook.cells[-2].id == "synthetic-stvmd-heading"
+    assert notebook.cells[-1].id == "synthetic-stvmd-two-sines"
+    source = notebook.cells[-1].source
+    for marker in (
+        "t = np.arange(SYNTHETIC_SAMPLE_COUNT) / SYNTHETIC_FS",
+        "x1 = np.sin(2 * np.pi * 20 * t)",
+        "x2 = 0.5 * np.sin(2 * np.pi * 28 * t)",
+        "synthetic_x = np.vstack([x1, x2])",
+        "synthetic_stvmd_result = run_original_stvmd(",
+        "plot_center_frequencies(",
+    ):
+        assert marker in source
 
 
 def test_notebook_is_independent_and_orders_vmd_before_stvmd():

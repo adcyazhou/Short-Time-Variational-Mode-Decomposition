@@ -1,0 +1,16 @@
+﻿metric,value,unit
+kept_modes,"mode_1,mode_2,mode_3,mode_4,mode_5",
+removed_modes,"mode_6,mode_7,mode_8",
+samples,33493,samples
+original_peak_abs,22.21,mm/s
+reconstructed_peak_abs,21.017835942786903,mm/s
+rmse_original_minus_reconstructed,0.13243815788651148,mm/s
+correlation_original_reconstructed,0.9937247266458198,
+removed_energy_percent_of_mode_sum,1.2389451593149876,%
+fs_hz,4096.0,Hz
+nperseg,512,samples
+noverlap,384,samples
+nfft,1024,samples
+frequency_max_hz,250.0,Hz
+color_vmin_db,-74.6557342448612,dB
+color_vmax_db,-14.655734244861193,dB

@@ -1,0 +1,13 @@
+﻿metric,value,unit,interpretation
+SNR,23.8112183110825,dB,larger is better (paper Eq. 19)
+RMSE,0.07608887990683776,mm/s,smaller is better (paper Eq. 20)
+Original peak absolute velocity,22.21,mm/s,reference
+Denoised peak absolute velocity,21.815456364099838,mm/s,small change preferred
+Peak change,-1.77642339441767,%,absolute change near zero preferred
+Original squared-amplitude energy,46635.674507,(mm/s)^2,reference
+Denoised squared-amplitude energy,45593.10054551193,(mm/s)^2,high retention preferred
+Energy retained,97.76442825688824,%,high retention preferred
+Removed component energy,144.17440982308878,(mm/s)^2,reported for transparency
+Correlation original-denoised,0.9979620757956821,-,closer to 1 indicates waveform preservation
+Original global dominant frequency,1.2229421073060043,Hz,"supplementary FFT metric, not paper AOK"
+Denoised global dominant frequency,1.2229421073060043,Hz,"supplementary FFT metric, not paper AOK"

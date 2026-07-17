@@ -1,0 +1,10 @@
+﻿parameter,value
+fs_hz,4096.0
+nperseg,512.0
+noverlap,384.0
+nfft,1024.0
+frequency_max_hz,250.0
+color_vmin_db,-74.64971369391066
+color_vmax_db,-14.649713693910659
+threshold,0.55
+samples,33493.0

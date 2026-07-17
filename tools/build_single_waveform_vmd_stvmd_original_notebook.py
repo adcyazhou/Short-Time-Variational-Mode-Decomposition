@@ -609,6 +609,72 @@ else:
 '''.strip()
 
 
+SYNTHETIC_STVMD_TWO_SINES = r'''
+# Synthetic two-channel test signal:
+# x1 is a 20 Hz sine wave; x2 is a 28 Hz sine wave with half amplitude.
+SYNTHETIC_FS = 128.0
+SYNTHETIC_DURATION_S = 2.0
+SYNTHETIC_SAMPLE_COUNT = int(SYNTHETIC_FS * SYNTHETIC_DURATION_S)
+SYNTHETIC_K = 3
+SYNTHETIC_ALPHA=50.0
+SYNTHETIC_TAU=1e-5
+SYNTHETIC_TOL = 1e-6
+SYNTHETIC_MAX_ITERS = 20
+SYNTHETIC_WINDOW_LENGTH = 64
+SYNTHETIC_PLOT_MAX_HZ = 40.0
+
+t = np.arange(SYNTHETIC_SAMPLE_COUNT) / SYNTHETIC_FS
+x1 = np.sin(2 * np.pi * 20 * t)
+x2 = 0.5 * np.sin(2 * np.pi * 28 * t)
+
+# Treat x1 and x2 as two channels for STVMD.
+# To analyze their single-channel sum instead, replace the next line with:
+# synthetic_x = (x1 + x2).reshape(1, -1)
+synthetic_x = np.vstack([x1, x2])
+
+synthetic_stvmd_result = run_original_stvmd(
+    synthetic_x,
+    fs=SYNTHETIC_FS,
+    K=SYNTHETIC_K,
+    alpha=SYNTHETIC_ALPHA,
+    tau=SYNTHETIC_TAU,
+    tol=SYNTHETIC_TOL,
+    max_iters=SYNTHETIC_MAX_ITERS,
+    window_length=SYNTHETIC_WINDOW_LENGTH,
+)
+
+synthetic_mean_centers = np.mean(
+    synthetic_stvmd_result["center_frequency_hz"], axis=1
+)
+print(
+    "Mean STVMD center frequencies (Hz):",
+    np.array2string(synthetic_mean_centers, precision=3),
+)
+
+synthetic_input_figure, synthetic_input_axis = plt.subplots(
+    1, 1, figsize=(10, 3.5), constrained_layout=True
+)
+synthetic_input_axis.plot(t, x1, label="x1 = sin(2π20t)")
+synthetic_input_axis.plot(t, x2, label="x2 = 0.5 sin(2π28t)")
+synthetic_input_axis.set(
+    title="Synthetic two-channel input",
+    xlabel="Time (s)",
+    ylabel="Amplitude",
+)
+synthetic_input_axis.legend(loc="upper right")
+
+synthetic_center_figure = plot_center_frequencies(
+    "Synthetic two-channel STVMD",
+    t,
+    synthetic_stvmd_result,
+    plot_max_hz=SYNTHETIC_PLOT_MAX_HZ,
+)
+
+display(synthetic_input_figure)
+display(synthetic_center_figure)
+'''.strip()
+
+
 def build():
     notebook = v4.new_notebook(
         cells=[
@@ -654,6 +720,11 @@ def build():
                 "export-heading",
             ),
             code(EXPORT, "export"),
+            markdown(
+                "## Synthetic STVMD example: 20 Hz and 28 Hz",
+                "synthetic-stvmd-heading",
+            ),
+            code(SYNTHETIC_STVMD_TWO_SINES, "synthetic-stvmd-two-sines"),
         ],
         metadata={
             "kernelspec": {
